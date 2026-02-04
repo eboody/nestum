@@ -1,0 +1,3 @@
+[workspace]
+members = ["module_path_extractor", "nestum"]
+resolver = "2"
