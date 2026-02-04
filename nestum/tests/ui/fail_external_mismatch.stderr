@@ -1,5 +1,5 @@
 error: field type Other does not match external enum path crate::a::Inner; use the enum ident as the field type
-  --> tests/ui/fail_external_mismatch.rs:13:10
+  --> tests/ui/fail_external_mismatch.rs:15:10
    |
-13 |     Wrap(Other),
+15 |     Wrap(Other),
    |          ^^^^^

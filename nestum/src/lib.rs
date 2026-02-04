@@ -2,7 +2,6 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use syn::{
     parse_macro_input, punctuated::Punctuated, spanned::Spanned, Attribute, ExprMatch, Fields,
@@ -11,20 +10,25 @@ use syn::{
 
 #[proc_macro_attribute]
 pub fn nestum(args: TokenStream, input: TokenStream) -> TokenStream {
-    if !args.is_empty() {
-        return syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "nestum does not accept arguments",
-        )
-        .to_compile_error()
-        .into();
-    }
-
     let item = parse_macro_input!(input as Item);
     match item {
-        Item::Enum(item_enum) => expand_enum(item_enum)
-            .unwrap_or_else(|err| err.to_compile_error())
-            .into(),
+        Item::Enum(item_enum) => {
+            if !args.is_empty() {
+                return syn::Error::new(
+                    item_enum.ident.span(),
+                    format!(
+                        "invalid #[nestum(...)] on enum {}; \
+nestum does not accept arguments. Use #[nestum] on enums only",
+                        item_enum.ident
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
+            expand_enum(item_enum)
+                .unwrap_or_else(|err| err.to_compile_error())
+                .into()
+        }
         other => syn::Error::new(other.span(), "nestum can only be applied to enums")
             .to_compile_error()
             .into(),
@@ -44,7 +48,18 @@ pub fn nested(input: TokenStream) -> TokenStream {
 
 fn expand_enum(item: ItemEnum) -> Result<proc_macro2::TokenStream, syn::Error> {
     let (file_path, module_root, module_path) = current_module_context()?;
-    let enums_by_ident = ensure_module_enums_loaded(&module_path, &file_path, &module_root)?;
+    let mut cache: HashMap<String, HashMap<String, ItemEnum>> = HashMap::new();
+    let all = collect_enums_by_module_path(&file_path, &module_root, &file_path)?;
+    for (module, enums) in all.into_iter() {
+        cache.insert(module, enums);
+    }
+    let enums_by_ident = cache.get(&module_path).cloned().ok_or_else(|| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "no enums found for current module path; \
+ensure the enum is defined in the same source file and module as the macro call",
+        )
+    })?;
 
     let mut marked_enums = HashSet::new();
     for (name, info) in enums_by_ident.iter() {
@@ -69,14 +84,27 @@ nestum does not accept arguments. Use #[nestum] on enums only"
         item,
         &enums_by_ident,
         &marked_enums,
+        &module_path,
         &file_path,
         &module_root,
+        &mut cache,
     )
 }
 
 fn expand_match(expr: ExprMatch) -> Result<proc_macro2::TokenStream, syn::Error> {
     let (file_path, module_root, module_path) = current_module_context()?;
-    let enums_by_ident = ensure_module_enums_loaded(&module_path, &file_path, &module_root)?;
+    let mut cache: HashMap<String, HashMap<String, ItemEnum>> = HashMap::new();
+    let all = collect_enums_by_module_path(&file_path, &module_root, &file_path)?;
+    for (module, enums) in all.into_iter() {
+        cache.insert(module, enums);
+    }
+    let enums_by_ident = cache.get(&module_path).cloned().ok_or_else(|| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "no enums found for current module path; \
+ensure the enum is defined in the same source file and module as the macro call",
+        )
+    })?;
 
     let mut arms = Vec::new();
     for mut arm in expr.arms {
@@ -86,6 +114,7 @@ fn expand_match(expr: ExprMatch) -> Result<proc_macro2::TokenStream, syn::Error>
             &module_root,
             &module_path,
             &enums_by_ident,
+            &mut cache,
         )?;
         arms.push(arm);
     }
@@ -102,8 +131,10 @@ fn expand_enum_with_context(
     item: ItemEnum,
     enums_by_ident: &HashMap<String, ItemEnum>,
     marked_enums: &HashSet<String>,
+    module_path: &str,
     current_file: &str,
     module_root: &std::path::Path,
+    cache: &mut HashMap<String, HashMap<String, ItemEnum>>,
 ) -> Result<proc_macro2::TokenStream, syn::Error> {
     let vis = item.vis.clone();
     let enum_ident = item.ident.clone();
@@ -130,7 +161,6 @@ fn expand_enum_with_context(
 
         let mut variant_clean = variant.clone();
         variant_clean.attrs = cleaned_attrs;
-        enum_variants.push(variant_clean);
 
         if let Some(external_path) = external_path {
             let inner_ty = extract_single_tuple_type(variant).map_err(|_| {
@@ -176,7 +206,8 @@ use the enum ident as the field type",
             }
 
             let (inner_enum, inner_is_marked) =
-                resolve_external_enum(&external_path, current_file, module_root)?.ok_or_else(|| {
+                resolve_external_enum(&external_path, current_file, module_root, cache)?
+                    .ok_or_else(|| {
                     syn::Error::new(
                         external_path.span(),
                         format!(
@@ -186,6 +217,17 @@ ensure the module path exists and the enum is declared in that module",
                         ),
                     )
                 })?;
+
+            if !inner_is_marked {
+                return Err(syn::Error::new(
+                    external_path.span(),
+                    "external enum must be marked with #[nestum] to enable nesting",
+                ));
+            }
+
+            let enum_type_path =
+                enum_type_path_from_external_path(&external_path, &inner_enum.ident, true);
+            rewrite_variant_type_for_nested(&mut variant_clean, enum_type_path)?;
 
             let variant_ident = &variant.ident;
             let wrapper_items = build_wrappers_with_path(
@@ -197,6 +239,7 @@ ensure the module path exists and the enum is declared in that module",
             )?;
 
             nested_variant_modules.push(quote! {
+                #[allow(non_snake_case)]
                 pub mod #variant_ident {
                     #(#wrapper_items)*
                 }
@@ -206,6 +249,10 @@ ensure the module path exists and the enum is declared in that module",
                 if let Some(inner_enum) = enums_by_ident.get(&inner_ident.to_string()) {
                     let inner_is_marked = marked_enums.contains(&inner_ident.to_string());
                     if inner_is_marked {
+                        let enum_type_path =
+                            enum_type_path_from_module(module_path, &inner_ident, true);
+                        rewrite_variant_type_for_nested(&mut variant_clean, enum_type_path)?;
+
                         let variant_ident = &variant.ident;
                         let wrapper_items = build_wrappers(
                             &enum_ident,
@@ -215,27 +262,21 @@ ensure the module path exists and the enum is declared in that module",
                         )?;
 
                         nested_variant_modules.push(quote! {
+                            #[allow(non_snake_case)]
                             pub mod #variant_ident {
                                 #(#wrapper_items)*
                             }
                         });
                     }
-                } else if let Some(locations) = find_marked_enum_modules(&inner_ident)? {
-                    let locations = locations.join(", ");
-                    return Err(syn::Error::new(
-                        inner_ty.span(),
-                        format!(
-                            "nested enum type {} is marked with #[nestum] in a different module ({locations}); \
-use #[nestum(external = \"path::to::{}\")], or move the enum into the same module",
-                            inner_ident, inner_ident
-                        ),
-                    ));
                 }
             }
         }
+
+        enum_variants.push(variant_clean);
     }
 
     Ok(quote! {
+        #[allow(non_snake_case)]
         #vis mod #enum_mod_ident {
             #(#enum_attrs)*
             #vis enum #enum_ident {
@@ -406,12 +447,60 @@ fn build_wrappers_with_path(
     Ok(items)
 }
 
+fn rewrite_variant_type_for_nested(
+    variant: &mut syn::Variant,
+    type_path: syn::Path,
+) -> Result<(), syn::Error> {
+    let syn::Fields::Unnamed(fields) = &mut variant.fields else {
+        return Ok(());
+    };
+    if fields.unnamed.len() != 1 {
+        return Ok(());
+    }
+
+    let ty = syn::Type::Path(syn::TypePath {
+        qself: None,
+        path: type_path,
+    });
+    fields.unnamed[0].ty = ty;
+    Ok(())
+}
+
+fn enum_type_path_from_module(
+    module_path: &str,
+    enum_ident: &syn::Ident,
+    marked: bool,
+) -> syn::Path {
+    let module_idents = absolute_module_idents(module_path);
+    let mut tail = vec![enum_ident.clone()];
+    if marked {
+        tail.push(enum_ident.clone());
+    }
+    build_path_from_idents(module_idents, &tail)
+}
+
+fn enum_type_path_from_external_path(
+    base_path: &syn::Path,
+    enum_ident: &syn::Ident,
+    marked: bool,
+) -> syn::Path {
+    let mut path = base_path.clone();
+    if marked {
+        path.segments.push(syn::PathSegment {
+            ident: enum_ident.clone(),
+            arguments: syn::PathArguments::None,
+        });
+    }
+    path
+}
+
 fn rewrite_pat(
     pat: Pat,
     current_file: &str,
     module_root: &std::path::Path,
     current_module: &str,
     enums_by_ident: &HashMap<String, ItemEnum>,
+    cache: &mut HashMap<String, HashMap<String, ItemEnum>>,
 ) -> Result<Pat, syn::Error> {
     match pat {
         Pat::Path(pat_path) => rewrite_pat_path(
@@ -420,6 +509,7 @@ fn rewrite_pat(
             module_root,
             current_module,
             enums_by_ident,
+            cache,
         ),
         Pat::TupleStruct(pat_tuple) => rewrite_pat_tuple_struct(
             pat_tuple,
@@ -427,6 +517,7 @@ fn rewrite_pat(
             module_root,
             current_module,
             enums_by_ident,
+            cache,
         ),
         Pat::Struct(pat_struct) => rewrite_pat_struct(
             pat_struct,
@@ -434,6 +525,7 @@ fn rewrite_pat(
             module_root,
             current_module,
             enums_by_ident,
+            cache,
         ),
         Pat::Or(PatOr {
             attrs,
@@ -448,6 +540,7 @@ fn rewrite_pat(
                     module_root,
                     current_module,
                     enums_by_ident,
+                    cache,
                 )?);
             }
             Ok(Pat::Or(PatOr {
@@ -466,6 +559,7 @@ fn rewrite_pat_path(
     module_root: &std::path::Path,
     current_module: &str,
     enums_by_ident: &HashMap<String, ItemEnum>,
+    cache: &mut HashMap<String, HashMap<String, ItemEnum>>,
 ) -> Result<Pat, syn::Error> {
     let Some((module_path, explicit_crate, outer_enum, outer_variant, inner_variant)) =
         split_nested_path(&pat_path.path)?
@@ -481,6 +575,7 @@ fn rewrite_pat_path(
         module_root,
         current_module,
         enums_by_ident,
+        cache,
     )? else {
         return Ok(Pat::Path(pat_path));
     };
@@ -511,6 +606,7 @@ only #[nestum] enums support nested match patterns",
         module_root,
         current_module,
         enums_by_ident,
+        cache,
     )?;
 
     let (inner_enum_item, inner_marked) = inner_enum_info.ok_or_else(|| {
@@ -569,6 +665,7 @@ fn rewrite_pat_tuple_struct(
     module_root: &std::path::Path,
     current_module: &str,
     enums_by_ident: &HashMap<String, ItemEnum>,
+    cache: &mut HashMap<String, HashMap<String, ItemEnum>>,
 ) -> Result<Pat, syn::Error> {
     let Some((module_path, explicit_crate, outer_enum, outer_variant, inner_variant)) =
         split_nested_path(&pat_tuple.path)?
@@ -584,6 +681,7 @@ fn rewrite_pat_tuple_struct(
         module_root,
         current_module,
         enums_by_ident,
+        cache,
     )? else {
         return Ok(Pat::TupleStruct(pat_tuple));
     };
@@ -614,6 +712,7 @@ only #[nestum] enums support nested match patterns",
         module_root,
         current_module,
         enums_by_ident,
+        cache,
     )?;
 
     let (inner_enum_item, inner_marked) = inner_enum_info.ok_or_else(|| {
@@ -675,6 +774,7 @@ fn rewrite_pat_struct(
     module_root: &std::path::Path,
     current_module: &str,
     enums_by_ident: &HashMap<String, ItemEnum>,
+    cache: &mut HashMap<String, HashMap<String, ItemEnum>>,
 ) -> Result<Pat, syn::Error> {
     let Some((module_path, explicit_crate, outer_enum, outer_variant, inner_variant)) =
         split_nested_path(&pat_struct.path)?
@@ -690,6 +790,7 @@ fn rewrite_pat_struct(
         module_root,
         current_module,
         enums_by_ident,
+        cache,
     )? else {
         return Ok(Pat::Struct(pat_struct));
     };
@@ -720,6 +821,7 @@ only #[nestum] enums support nested match patterns",
         module_root,
         current_module,
         enums_by_ident,
+        cache,
     )?;
 
     let (inner_enum_item, inner_marked) = inner_enum_info.ok_or_else(|| {
@@ -811,6 +913,7 @@ fn resolve_enum_from_path(
     module_root: &std::path::Path,
     current_module: &str,
     enums_by_ident: &HashMap<String, ItemEnum>,
+    cache: &mut HashMap<String, HashMap<String, ItemEnum>>,
 ) -> Result<Option<(ItemEnum, bool)>, syn::Error> {
     let module_path_str = if module_path.is_empty() {
         current_module.to_string()
@@ -844,11 +947,12 @@ fn resolve_enum_from_path(
         return Ok(item.map(|i| (i, marked)));
     }
 
-    if let Err(err) = ensure_external_module_loaded(
+    if let Err(err) = load_module_enums(
         proc_macro2::Span::call_site(),
         &module_path_str,
         current_file,
         module_root,
+        cache,
     ) {
         if explicit_crate {
             return Err(err);
@@ -856,8 +960,7 @@ fn resolve_enum_from_path(
         return Ok(None);
     }
 
-    let registry = registry_clone();
-    let enums = match registry.get(&module_path_str) {
+    let enums = match cache.get(&module_path_str) {
         Some(enums) => enums,
         None => return Ok(None),
     };
@@ -987,6 +1090,24 @@ fn module_idents_from_str(path: &str) -> Vec<syn::Ident> {
         .collect()
 }
 
+fn absolute_module_idents(module_path: &str) -> Vec<syn::Ident> {
+    let mut segments: Vec<String> = module_path
+        .split("::")
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    if segments.is_empty() {
+        segments.push("crate".to_string());
+    } else if segments[0] != "crate" {
+        segments.insert(0, "crate".to_string());
+    }
+
+    segments
+        .into_iter()
+        .map(|s| syn::Ident::new(&s, proc_macro2::Span::call_site()))
+        .collect()
+}
+
 fn build_path_from_idents(
     module_idents: Vec<syn::Ident>,
     tail: &[syn::Ident],
@@ -1014,11 +1135,10 @@ enum NestumAttrKind {
 fn nestum_attr_kind(attrs: &[Attribute]) -> Result<NestumAttrKind, syn::Error> {
     for attr in attrs.iter() {
         if attr.path().is_ident("nestum") {
-            let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
-            if metas.is_empty() {
-                return Ok(NestumAttrKind::Empty);
+            match &attr.meta {
+                Meta::Path(_) => return Ok(NestumAttrKind::Empty),
+                Meta::List(_) | Meta::NameValue(_) => return Ok(NestumAttrKind::WithArgs),
             }
-            return Ok(NestumAttrKind::WithArgs);
         }
     }
     Ok(NestumAttrKind::None)
@@ -1030,50 +1150,68 @@ fn parse_variant_external_path(attrs: &[Attribute]) -> Result<Option<syn::Path>,
             continue;
         }
 
-        let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
-        if metas.is_empty() {
-            return Err(syn::Error::new(
-                attr.span(),
-                "invalid #[nestum] on variant; use #[nestum(external = \"path::to::Enum\")]",
-            ));
-        }
-
-        for meta in metas.iter() {
-            if let Meta::NameValue(MetaNameValue { path, value, .. }) = meta {
-                if path.is_ident("external") {
-                    let lit = match value {
-                        syn::Expr::Lit(expr_lit) => expr_lit.lit.clone(),
-                        _ => {
-                            return Err(syn::Error::new(
-                                value.span(),
-                                "external must be a string literal",
-                            ))
-                        }
-                    };
-                    let path_str = match lit {
-                        syn::Lit::Str(lit_str) => lit_str,
-                        _ => {
-                            return Err(syn::Error::new(
-                                value.span(),
-                                "external must be a string literal",
-                            ))
-                        }
-                    };
-                    let parsed: syn::Path = syn::parse_str(&path_str.value()).map_err(|_| {
-                        syn::Error::new(
-                            path_str.span(),
-                            "external must be a valid Rust path, e.g. \"crate::foo::Enum\"",
-                        )
-                    })?;
-                    return Ok(Some(parsed));
+        match &attr.meta {
+            Meta::Path(_) => {
+                return Err(syn::Error::new(
+                    attr.span(),
+                    "invalid #[nestum] on variant; use #[nestum(external = \"path::to::Enum\")]",
+                ));
+            }
+            Meta::NameValue(_) => {
+                return Err(syn::Error::new(
+                    attr.span(),
+                    "invalid #[nestum(...)] on variant; expected external = \"path::to::Enum\"",
+                ));
+            }
+            Meta::List(list) => {
+                let metas =
+                    list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+                if metas.is_empty() {
+                    return Err(syn::Error::new(
+                        attr.span(),
+                        "invalid #[nestum] on variant; use #[nestum(external = \"path::to::Enum\")]",
+                    ));
                 }
+
+                for meta in metas.iter() {
+                    if let Meta::NameValue(MetaNameValue { path, value, .. }) = meta {
+                        if path.is_ident("external") {
+                            let lit = match value {
+                                syn::Expr::Lit(expr_lit) => expr_lit.lit.clone(),
+                                _ => {
+                                    return Err(syn::Error::new(
+                                        value.span(),
+                                        "external must be a string literal",
+                                    ))
+                                }
+                            };
+                            let path_str = match lit {
+                                syn::Lit::Str(lit_str) => lit_str,
+                                _ => {
+                                    return Err(syn::Error::new(
+                                        value.span(),
+                                        "external must be a string literal",
+                                    ))
+                                }
+                            };
+                            let parsed: syn::Path =
+                                syn::parse_str(&path_str.value()).map_err(|_| {
+                                    syn::Error::new(
+                                        path_str.span(),
+                                        "external must be a valid Rust path, e.g. \"crate::foo::Enum\"",
+                                    )
+                                })?;
+                            return Ok(Some(parsed));
+                        }
+                    }
+                }
+
+                return Err(syn::Error::new(
+                    attr.span(),
+                    "invalid #[nestum(...)] on variant; expected external = \"path::to::Enum\"",
+                ));
             }
         }
-
-        return Err(syn::Error::new(
-            attr.span(),
-            "invalid #[nestum(...)] on variant; expected external = \"path::to::Enum\"",
-        ));
     }
 
     Ok(None)
@@ -1107,6 +1245,57 @@ fn extract_simple_ident(ty: &syn::Type) -> Result<syn::Ident, syn::Error> {
     }
 }
 
+fn find_module_path_in_file_with_base(
+    file_path: &str,
+    line_number: usize,
+    base: &str,
+) -> Option<String> {
+    let content = std::fs::read_to_string(file_path).ok()?;
+    let parsed = syn::parse_file(&content).ok()?;
+    let mut best_stack: Vec<String> = Vec::new();
+
+    fn span_contains_line(span: proc_macro2::Span, line: usize) -> bool {
+        let proc_macro2::LineColumn { line: start, .. } = span.start();
+        let proc_macro2::LineColumn { line: end, .. } = span.end();
+        line >= start && line <= end
+    }
+
+    fn visit_items(
+        items: &[Item],
+        line: usize,
+        stack: &mut Vec<String>,
+        best: &mut Vec<String>,
+    ) {
+        for item in items {
+            let Item::Mod(module) = item else { continue };
+            let Some((_, inner_items)) = &module.content else { continue };
+            if !span_contains_line(module.span(), line) {
+                continue;
+            }
+
+            stack.push(module.ident.to_string());
+            if stack.len() > best.len() {
+                *best = stack.clone();
+            }
+            visit_items(inner_items, line, stack, best);
+            stack.pop();
+        }
+    }
+
+    visit_items(&parsed.items, line_number, &mut Vec::new(), &mut best_stack);
+
+    if best_stack.is_empty() {
+        return Some(base.to_string());
+    }
+
+    let nested = best_stack.join("::");
+    if base == "crate" || base.is_empty() {
+        Some(nested)
+    } else {
+        Some(format!("{base}::{nested}"))
+    }
+}
+
 fn current_module_context() -> Result<(String, std::path::PathBuf, String), syn::Error> {
     let (file_path, line) = module_path_extractor::get_source_info().ok_or_else(|| {
         syn::Error::new(
@@ -1117,93 +1306,82 @@ this macro requires nightly and proc_macro_span support",
     })?;
 
     let module_root = module_path_extractor::module_root_from_file(&file_path);
-    let module_path =
-        module_path_extractor::find_module_path_in_file(&file_path, line, &module_root)
-            .ok_or_else(|| {
+    let module_path = if module_root
+        .to_string_lossy()
+        .replace('\\', "/")
+        .ends_with("/src")
+    {
+        module_path_extractor::find_module_path_in_file(&file_path, line, &module_root).ok_or_else(
+            || {
                 syn::Error::new(
                     proc_macro2::Span::call_site(),
                     "unable to determine module path for #[nestum]; \
 ensure the enum is in a regular Rust module file (not generated or included)",
                 )
-            })?;
+            },
+        )?
+    } else {
+        find_module_path_in_file_with_base(&file_path, line, "crate").ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "unable to determine module path for #[nestum]; \
+ensure the enum is in a regular Rust module file (not generated or included)",
+            )
+        })?
+    };
 
     Ok((file_path, module_root, module_path))
 }
 
-fn ensure_module_enums_loaded(
+fn load_module_enums(
+    span: proc_macro2::Span,
     module_path: &str,
     current_file: &str,
     module_root: &std::path::Path,
-) -> Result<HashMap<String, ItemEnum>, syn::Error> {
-    if let Some(found) = registry_get(module_path) {
-        return Ok(found);
+    cache: &mut HashMap<String, HashMap<String, ItemEnum>>,
+) -> Result<(), syn::Error> {
+    if cache.get(module_path).is_some() {
+        return Ok(());
     }
 
-    let all = collect_enums_by_module_path(current_file, module_root)?;
-    registry_insert_all(all);
-
-    registry_get(module_path).ok_or_else(|| {
-        syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "no enums found for current module path; \
-ensure the enum is defined in the same source file and module as the macro call",
-        )
-    })
-}
-
-fn find_marked_enum_modules(name: &syn::Ident) -> Result<Option<Vec<String>>, syn::Error> {
-    let registry = registry_clone();
-    let mut locations = Vec::new();
-    for (module_path, enums) in registry.iter() {
-        if let Some(item_enum) = enums.get(&name.to_string()) {
-            match nestum_attr_kind(&item_enum.attrs)? {
-                NestumAttrKind::Empty => locations.push(module_path.clone()),
-                NestumAttrKind::WithArgs => {
-                    return Err(syn::Error::new(
-                        item_enum.span(),
-                        format!(
-                            "invalid #[nestum(...)] on enum {name}; \
-nestum does not accept arguments. Use #[nestum] on enums only"
-                        ),
-                    ));
+    let module_file =
+        module_path_extractor::module_path_to_file(module_path, current_file, module_root);
+    let module_file = match module_file {
+        Some(file) => file,
+        None => {
+            let all = collect_enums_by_module_path(current_file, module_root, current_file)?;
+            if all.contains_key(module_path) {
+                for (module, enums) in all.into_iter() {
+                    cache.insert(module, enums);
                 }
-                NestumAttrKind::None => {}
+                return Ok(());
             }
+            return Err(syn::Error::new(
+                span,
+                format!(
+                    "unable to locate module file for {module_path}; \
+expected {module_path}.rs or {module_path}/mod.rs under the module root"
+                ),
+            ));
         }
+    };
+
+    let all = collect_enums_by_module_path(
+        module_file.to_string_lossy().as_ref(),
+        module_root,
+        current_file,
+    )?;
+    for (module, enums) in all.into_iter() {
+        cache.insert(module, enums);
     }
 
-    if locations.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(locations))
-    }
-}
-
-thread_local! {
-    static REGISTRY: RefCell<HashMap<String, HashMap<String, ItemEnum>>> =
-        RefCell::new(HashMap::new());
-}
-
-fn registry_get(module_path: &str) -> Option<HashMap<String, ItemEnum>> {
-    REGISTRY.with(|cell| cell.borrow().get(module_path).cloned())
-}
-
-fn registry_insert_all(all: HashMap<String, HashMap<String, ItemEnum>>) {
-    REGISTRY.with(|cell| {
-        let mut reg = cell.borrow_mut();
-        for (module, enums) in all.into_iter() {
-            reg.insert(module, enums);
-        }
-    });
-}
-
-fn registry_clone() -> HashMap<String, HashMap<String, ItemEnum>> {
-    REGISTRY.with(|cell| cell.borrow().clone())
+    Ok(())
 }
 
 fn collect_enums_by_module_path(
     file_path: &str,
     module_root: &std::path::Path,
+    current_file: &str,
 ) -> Result<HashMap<String, HashMap<String, ItemEnum>>, syn::Error> {
     let content = std::fs::read_to_string(file_path).map_err(|err| {
         syn::Error::new(
@@ -1219,7 +1397,16 @@ fn collect_enums_by_module_path(
         )
     })?;
 
-    let base = module_path_extractor::module_path_from_file_with_root(file_path, module_root);
+    let base = if file_path == current_file
+        && !module_root
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("/src")
+    {
+        "crate".to_string()
+    } else {
+        module_path_extractor::module_path_from_file_with_root(file_path, module_root)
+    };
     let mut map: HashMap<String, HashMap<String, ItemEnum>> = HashMap::new();
 
     fn join_module_path(base: &str, stack: &[String]) -> String {
@@ -1267,6 +1454,7 @@ fn resolve_external_enum(
     path: &syn::Path,
     current_file: &str,
     module_root: &std::path::Path,
+    cache: &mut HashMap<String, HashMap<String, ItemEnum>>,
 ) -> Result<Option<(ItemEnum, bool)>, syn::Error> {
     let (module_path, enum_ident) = split_module_and_ident(path).ok_or_else(|| {
         syn::Error::new(
@@ -1275,10 +1463,9 @@ fn resolve_external_enum(
         )
     })?;
 
-    ensure_external_module_loaded(path.span(), &module_path, current_file, module_root)?;
+    load_module_enums(path.span(), &module_path, current_file, module_root, cache)?;
 
-    let registry = registry_clone();
-    let enums = match registry.get(&module_path) {
+    let enums = match cache.get(&module_path) {
         Some(enums) => enums,
         None => return Ok(None),
     };
@@ -1321,36 +1508,4 @@ fn external_path_to_string(path: &syn::Path) -> String {
         .join("::")
 }
 
-fn ensure_external_module_loaded(
-    span: proc_macro2::Span,
-    module_path: &str,
-    current_file: &str,
-    module_root: &std::path::Path,
-) -> Result<(), syn::Error> {
-    if registry_get(module_path).is_some() {
-        return Ok(());
-    }
-
-    let module_file = module_path_extractor::module_path_to_file(
-        module_path,
-        current_file,
-        module_root,
-    )
-    .ok_or_else(|| {
-        syn::Error::new(
-            span,
-            format!(
-                "unable to locate module file for {module_path}; \
-expected {module_path}.rs or {module_path}/mod.rs under the module root"
-            ),
-        )
-    })?;
-
-    let all = collect_enums_by_module_path(
-        module_file.to_string_lossy().as_ref(),
-        module_root,
-    )?;
-    registry_insert_all(all);
-
-    Ok(())
-}
+// module loading handled by load_module_enums()

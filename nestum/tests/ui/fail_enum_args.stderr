@@ -1,5 +1,5 @@
 error: invalid #[nestum(...)] on enum Enum1; nestum does not accept arguments. Use #[nestum] on enums only
-  --> tests/ui/fail_enum_args.rs:3:1
-   |
-3  | #[nestum(foo = "bar")]
-   | ^^^^^^^^^^^^^^^^^^^^^^
+ --> tests/ui/fail_enum_args.rs:4:10
+  |
+4 | pub enum Enum1 {
+  |          ^^^^^
