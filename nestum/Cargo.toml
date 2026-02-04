@@ -2,6 +2,10 @@
 name = "nestum"
 version = "0.1.0"
 edition = "2021"
+description = "Proc-macro for nested enum paths like Enum1::Variant1::VariantA"
+license = "MIT"
+repository = "https://github.com/eboody/nestum"
+readme = "../README.md"
 
 [lib]
 proc-macro = true
