@@ -10,7 +10,7 @@ proc-macro = true
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }
-module_path_extractor = { path = "../module_path_extractor" }
+module_path_extractor = "0.2.2"
 
 [dev-dependencies]
 trybuild = "1"
