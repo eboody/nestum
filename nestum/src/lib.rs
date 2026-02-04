@@ -2,8 +2,8 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::sync::{OnceLock, RwLock};
 use syn::{
     parse_macro_input, punctuated::Punctuated, spanned::Spanned, Attribute, Fields, Item, ItemEnum,
     Meta, MetaNameValue, Token,
@@ -501,34 +501,24 @@ fn ensure_module_enums_loaded(
     current_file: &str,
     module_root: &std::path::Path,
 ) -> Result<HashMap<String, ItemEnum>, syn::Error> {
-    if let Some(found) = enum_registry()
-        .read()
-        .ok()
-        .and_then(|map| map.get(module_path).cloned())
-    {
+    if let Some(found) = registry_get(module_path) {
         return Ok(found);
     }
 
     let all = collect_enums_by_module_path(current_file, module_root)?;
-    let mut registry = enum_registry().write().unwrap();
-    for (module, enums) in all.into_iter() {
-        registry.insert(module, enums);
-    }
+    registry_insert_all(all);
 
-    registry
-        .get(module_path)
-        .cloned()
-        .ok_or_else(|| {
-            syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "no enums found for current module path; \
+    registry_get(module_path).ok_or_else(|| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "no enums found for current module path; \
 ensure the enum is defined in the same source file and module as the macro call",
-            )
-        })
+        )
+    })
 }
 
 fn find_marked_enum_modules(name: &syn::Ident) -> Result<Option<Vec<String>>, syn::Error> {
-    let registry = enum_registry().read().ok().cloned().unwrap_or_default();
+    let registry = registry_clone();
     let mut locations = Vec::new();
     for (module_path, enums) in registry.iter() {
         if let Some(item_enum) = enums.get(&name.to_string()) {
@@ -555,9 +545,26 @@ nestum does not accept arguments. Use #[nestum] on enums only"
     }
 }
 
-fn enum_registry() -> &'static RwLock<HashMap<String, HashMap<String, ItemEnum>>> {
-    static REGISTRY: OnceLock<RwLock<HashMap<String, HashMap<String, ItemEnum>>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| RwLock::new(HashMap::new()))
+thread_local! {
+    static REGISTRY: RefCell<HashMap<String, HashMap<String, ItemEnum>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn registry_get(module_path: &str) -> Option<HashMap<String, ItemEnum>> {
+    REGISTRY.with(|cell| cell.borrow().get(module_path).cloned())
+}
+
+fn registry_insert_all(all: HashMap<String, HashMap<String, ItemEnum>>) {
+    REGISTRY.with(|cell| {
+        let mut reg = cell.borrow_mut();
+        for (module, enums) in all.into_iter() {
+            reg.insert(module, enums);
+        }
+    });
+}
+
+fn registry_clone() -> HashMap<String, HashMap<String, ItemEnum>> {
+    REGISTRY.with(|cell| cell.borrow().clone())
 }
 
 fn collect_enums_by_module_path(
@@ -636,7 +643,7 @@ fn resolve_external_enum(
 
     ensure_external_module_loaded(path.span(), &module_path, current_file, module_root)?;
 
-    let registry = enum_registry().read().ok().cloned().unwrap_or_default();
+    let registry = registry_clone();
     let enums = match registry.get(&module_path) {
         Some(enums) => enums,
         None => return Ok(None),
@@ -686,12 +693,7 @@ fn ensure_external_module_loaded(
     current_file: &str,
     module_root: &std::path::Path,
 ) -> Result<(), syn::Error> {
-    if enum_registry()
-        .read()
-        .ok()
-        .and_then(|map| map.get(module_path).cloned())
-        .is_some()
-    {
+    if registry_get(module_path).is_some() {
         return Ok(());
     }
 
@@ -714,10 +716,7 @@ expected {module_path}.rs or {module_path}/mod.rs under the module root"
         module_file.to_string_lossy().as_ref(),
         module_root,
     )?;
-    let mut registry = enum_registry().write().unwrap();
-    for (module, enums) in all.into_iter() {
-        registry.insert(module, enums);
-    }
+    registry_insert_all(all);
 
     Ok(())
 }
