@@ -430,9 +430,13 @@ fn rewrite_pat(
             current_module,
             enums_by_ident,
         ),
-        Pat::Or(PatOr { pats, or_token, attrs }) => {
-            let mut new_pats = Vec::with_capacity(pats.len());
-            for pat in pats {
+        Pat::Or(PatOr {
+            attrs,
+            leading_vert,
+            cases,
+        }) => {
+            let mut new_pats = Vec::with_capacity(cases.len());
+            for pat in cases {
                 new_pats.push(rewrite_pat(
                     pat,
                     current_file,
@@ -443,8 +447,8 @@ fn rewrite_pat(
             }
             Ok(Pat::Or(PatOr {
                 attrs,
-                or_token,
-                pats: Punctuated::from_iter(new_pats),
+                leading_vert,
+                cases: Punctuated::from_iter(new_pats),
             }))
         }
         other => Ok(other),
@@ -488,14 +492,11 @@ only #[nestum] enums support nested match patterns",
         ));
     }
 
-    let (inner_enum_ident, inner_enum_path, inner_explicit_crate) = resolve_inner_enum_path(
-        &outer_enum_item,
-        &outer_variant,
-        current_file,
-        module_root,
-        current_module,
-        enums_by_ident,
-    )?;
+    let Some((inner_enum_ident, inner_enum_path, inner_explicit_crate)) =
+        resolve_inner_enum_path(&outer_enum_item, &outer_variant, enums_by_ident)?
+    else {
+        return Ok(Pat::Path(pat_path));
+    };
 
     let inner_enum_info = resolve_enum_from_path(
         &inner_enum_path,
@@ -537,13 +538,24 @@ only #[nestum] enums support nested match patterns",
     } else {
         effective_module_idents(&inner_enum_path, inner_explicit_crate, current_module)
     };
-    let outer_path = build_module_path_tokens(&outer_module_idents, &outer_enum);
-    let inner_path = build_module_path_tokens(&inner_module_idents, &inner_enum_ident);
+    let outer_variant_path =
+        build_path_from_idents(outer_module_idents, &[outer_enum.clone(), outer_enum.clone(), outer_variant.clone()]);
+    let inner_variant_path =
+        build_path_from_idents(inner_module_idents, &[inner_enum_ident.clone(), inner_enum_ident.clone(), inner_variant]);
 
-    let rewritten = quote! {
-        #outer_path::#outer_enum::#outer_variant(#inner_path::#inner_enum_ident::#inner_variant)
-    };
-    Ok(syn::parse2(rewritten)?)
+    let inner_pat = Pat::Path(PatPath {
+        attrs: Vec::new(),
+        qself: None,
+        path: inner_variant_path,
+    });
+
+    Ok(Pat::TupleStruct(PatTupleStruct {
+        attrs: Vec::new(),
+        qself: None,
+        path: outer_variant_path,
+        paren_token: Default::default(),
+        elems: Punctuated::from_iter(std::iter::once(inner_pat)),
+    }))
 }
 
 fn rewrite_pat_tuple_struct(
@@ -583,14 +595,11 @@ only #[nestum] enums support nested match patterns",
         ));
     }
 
-    let (inner_enum_ident, inner_enum_path, inner_explicit_crate) = resolve_inner_enum_path(
-        &outer_enum_item,
-        &outer_variant,
-        current_file,
-        module_root,
-        current_module,
-        enums_by_ident,
-    )?;
+    let Some((inner_enum_ident, inner_enum_path, inner_explicit_crate)) =
+        resolve_inner_enum_path(&outer_enum_item, &outer_variant, enums_by_ident)?
+    else {
+        return Ok(Pat::TupleStruct(pat_tuple));
+    };
 
     let inner_enum_info = resolve_enum_from_path(
         &inner_enum_path,
@@ -632,14 +641,27 @@ only #[nestum] enums support nested match patterns",
     } else {
         effective_module_idents(&inner_enum_path, inner_explicit_crate, current_module)
     };
-    let outer_path = build_module_path_tokens(&outer_module_idents, &outer_enum);
-    let inner_path = build_module_path_tokens(&inner_module_idents, &inner_enum_ident);
+    let outer_variant_path =
+        build_path_from_idents(outer_module_idents, &[outer_enum.clone(), outer_enum.clone(), outer_variant.clone()]);
+    let inner_variant_path =
+        build_path_from_idents(inner_module_idents, &[inner_enum_ident.clone(), inner_enum_ident.clone(), inner_variant]);
     let elems = pat_tuple.elems;
 
-    let rewritten = quote! {
-        #outer_path::#outer_enum::#outer_variant(#inner_path::#inner_enum_ident::#inner_variant(#elems))
-    };
-    Ok(syn::parse2(rewritten)?)
+    let inner_pat = Pat::TupleStruct(PatTupleStruct {
+        attrs: Vec::new(),
+        qself: None,
+        path: inner_variant_path,
+        paren_token: pat_tuple.paren_token,
+        elems,
+    });
+
+    Ok(Pat::TupleStruct(PatTupleStruct {
+        attrs: Vec::new(),
+        qself: None,
+        path: outer_variant_path,
+        paren_token: pat_tuple.paren_token,
+        elems: Punctuated::from_iter(std::iter::once(inner_pat)),
+    }))
 }
 
 fn rewrite_pat_struct(
@@ -679,14 +701,11 @@ only #[nestum] enums support nested match patterns",
         ));
     }
 
-    let (inner_enum_ident, inner_enum_path, inner_explicit_crate) = resolve_inner_enum_path(
-        &outer_enum_item,
-        &outer_variant,
-        current_file,
-        module_root,
-        current_module,
-        enums_by_ident,
-    )?;
+    let Some((inner_enum_ident, inner_enum_path, inner_explicit_crate)) =
+        resolve_inner_enum_path(&outer_enum_item, &outer_variant, enums_by_ident)?
+    else {
+        return Ok(Pat::Struct(pat_struct));
+    };
 
     let inner_enum_info = resolve_enum_from_path(
         &inner_enum_path,
@@ -728,26 +747,34 @@ only #[nestum] enums support nested match patterns",
     } else {
         effective_module_idents(&inner_enum_path, inner_explicit_crate, current_module)
     };
-    let outer_path = build_module_path_tokens(&outer_module_idents, &outer_enum);
-    let inner_path = build_module_path_tokens(&inner_module_idents, &inner_enum_ident);
+    let outer_variant_path =
+        build_path_from_idents(outer_module_idents, &[outer_enum.clone(), outer_enum.clone(), outer_variant.clone()]);
+    let inner_variant_path =
+        build_path_from_idents(inner_module_idents, &[inner_enum_ident.clone(), inner_enum_ident.clone(), inner_variant]);
     let fields = pat_struct.fields;
     let rest = pat_struct.rest;
 
-    let rewritten = quote! {
-        #outer_path::#outer_enum::#outer_variant(#inner_path::#inner_enum_ident::#inner_variant { #fields #rest })
-    };
-    Ok(syn::parse2(rewritten)?)
+    let inner_pat = Pat::Struct(PatStruct {
+        attrs: Vec::new(),
+        qself: None,
+        path: inner_variant_path,
+        brace_token: pat_struct.brace_token,
+        fields,
+        rest,
+    });
+
+    Ok(Pat::TupleStruct(PatTupleStruct {
+        attrs: Vec::new(),
+        qself: None,
+        path: outer_variant_path,
+        paren_token: Default::default(),
+        elems: Punctuated::from_iter(std::iter::once(inner_pat)),
+    }))
 }
 
 fn split_nested_path(
     path: &syn::Path,
 ) -> Result<Option<(Vec<syn::Ident>, bool, syn::Ident, syn::Ident, syn::Ident)>, syn::Error> {
-    if path.qself.is_some() {
-        return Err(syn::Error::new(
-            path.span(),
-            "nested match paths do not support qualified self paths",
-        ));
-    }
 
     let segments: Vec<_> = path.segments.iter().map(|s| s.ident.clone()).collect();
     if segments.len() < 3 {
@@ -841,24 +868,11 @@ fn resolve_enum_from_path(
 fn resolve_inner_enum_path(
     outer_enum: &ItemEnum,
     outer_variant: &syn::Ident,
-    current_file: &str,
-    module_root: &std::path::Path,
-    current_module: &str,
     enums_by_ident: &HashMap<String, ItemEnum>,
-) -> Result<(syn::Ident, Vec<syn::Ident>, bool), syn::Error> {
-    let variant = outer_enum
-        .variants
-        .iter()
-        .find(|v| v.ident == *outer_variant)
-        .ok_or_else(|| {
-            syn::Error::new(
-                outer_variant.span(),
-                format!(
-                    "variant {} not found on enum {}",
-                    outer_variant, outer_enum.ident
-                ),
-            )
-        })?;
+) -> Result<Option<(syn::Ident, Vec<syn::Ident>, bool)>, syn::Error> {
+    let Some(variant) = outer_enum.variants.iter().find(|v| v.ident == *outer_variant) else {
+        return Ok(None);
+    };
 
     let external_path = parse_variant_external_path(&variant.attrs)?;
     if let Some(path) = external_path {
@@ -878,14 +892,17 @@ fn resolve_inner_enum_path(
             .filter(|s| !s.is_empty())
             .map(|s| syn::Ident::new(s, proc_macro2::Span::call_site()))
             .collect();
-        return Ok((
+        return Ok(Some((
             syn::Ident::new(&enum_ident, proc_macro2::Span::call_site()),
             module_idents,
             explicit_crate,
-        ));
+        )));
     }
 
-    let inner_ty = extract_single_tuple_type(variant)?;
+    let inner_ty = match extract_single_tuple_type(variant) {
+        Ok(inner_ty) => inner_ty,
+        Err(_) => return Ok(None),
+    };
     let inner_ident = extract_simple_ident(&inner_ty)?;
 
     if enums_by_ident.get(&inner_ident.to_string()).is_none() {
@@ -899,7 +916,7 @@ ensure it is declared in the same module or use #[nestum(external = \"path::to::
         ));
     }
 
-    Ok((inner_ident, Vec::new(), false))
+    Ok(Some((inner_ident, Vec::new(), false)))
 }
 
 fn ensure_inner_variant_exists(
@@ -975,6 +992,24 @@ fn module_idents_from_str(path: &str) -> Vec<syn::Ident> {
         .filter(|s| !s.is_empty())
         .map(|s| syn::Ident::new(s, proc_macro2::Span::call_site()))
         .collect()
+}
+
+fn build_path_from_idents(
+    module_idents: Vec<syn::Ident>,
+    tail: &[syn::Ident],
+) -> syn::Path {
+    let mut segments = Vec::new();
+    for ident in module_idents.into_iter().chain(tail.iter().cloned()) {
+        segments.push(syn::PathSegment {
+            ident,
+            arguments: syn::PathArguments::None,
+        });
+    }
+
+    syn::Path {
+        leading_colon: None,
+        segments: Punctuated::from_iter(segments),
+    }
 }
 
 enum NestumAttrKind {
