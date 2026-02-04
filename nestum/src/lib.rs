@@ -37,6 +37,11 @@ pub fn nestum_match(input: TokenStream) -> TokenStream {
     expand_match(expr).unwrap_or_else(|err| err.to_compile_error()).into()
 }
 
+#[proc_macro]
+pub fn nested(input: TokenStream) -> TokenStream {
+    nestum_match(input)
+}
+
 fn expand_enum(item: ItemEnum) -> Result<proc_macro2::TokenStream, syn::Error> {
     let (file_path, module_root, module_path) = current_module_context()?;
     let enums_by_ident = ensure_module_enums_loaded(&module_path, &file_path, &module_root)?;
