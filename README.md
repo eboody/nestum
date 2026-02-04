@@ -100,6 +100,9 @@ Enables shadow-module generation and wrapper constructors.
 ### `#[nestum(external = "path::to::Enum")]` on variants
 Opt-in support for nesting an enum in another module file.
 
+### `nestum_match! { match value { ... } }`
+Macro that rewrites nested patterns (like `Enum1::Variant1::VariantA`) into real enum patterns.
+
 ## Examples
 
 ### Basic nesting
@@ -127,6 +130,26 @@ pub enum Outer {
 let _ = Outer::Wrap::A;
 ```
 
+### Nested match patterns
+```rust
+use nestum::{nestum, nestum_match};
+
+#[nestum]
+pub enum Inner { A, B(u8) }
+
+#[nestum]
+pub enum Outer { Wrap(Inner), Other }
+
+let value = Outer::Wrap::A;
+nestum_match! {
+    match value {
+        Outer::Wrap::A => {}
+        Outer::Wrap::B(n) => { let _ = n; }
+        Outer::Outer::Other => {}
+    }
+}
+```
+
 ## Limitations
 - External crates are not supported (proc macros can’t reliably inspect other crates’ ASTs).
 - The macro only resolves enums from source files in the current crate.
@@ -143,6 +166,9 @@ let _ = Outer::Wrap::A;
 
 ### Why does the enum type become `EnumName::EnumName`?
 Because `nestum` replaces the enum with a module of the same name. The original enum is re-emitted inside it.
+
+### How do I pattern match with nested paths?
+Use `nestum_match!` so paths like `Enum1::Variant1::VariantA` are rewritten to the real enum pattern.
 
 ### Why not support external crates?
 The macro would need to discover and parse dependency source files, which is brittle and not reliably possible in stable proc-macro APIs.
