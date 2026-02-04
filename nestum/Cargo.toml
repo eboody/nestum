@@ -1,0 +1,16 @@
+[package]
+name = "nestum"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+module_path_extractor = { path = "../module_path_extractor" }
+
+[dev-dependencies]
+trybuild = "1"

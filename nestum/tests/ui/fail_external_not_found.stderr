@@ -1,0 +1,5 @@
+error: unable to locate module file for missing; expected missing.rs or missing/mod.rs under the module root
+  --> tests/ui/fail_external_not_found.rs:5:5
+   |
+5  |     #[nestum(external = "crate::missing::Inner")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
