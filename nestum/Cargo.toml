@@ -1,7 +1,7 @@
 [package]
 name = "nestum"
-version = "0.1.2"
-edition = "2021"
+version = "0.1.3"
+edition = "2024"
 description = "Proc-macro for nested enum paths like Enum1::Variant1::VariantA"
 license = "MIT"
 repository = "https://github.com/eboody/nestum"

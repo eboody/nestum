@@ -945,18 +945,6 @@ fn ensure_inner_variant_exists(
     }
 }
 
-fn build_module_path_tokens(
-    module_idents: &[syn::Ident],
-    enum_ident: &syn::Ident,
-) -> proc_macro2::TokenStream {
-    if module_idents.is_empty() {
-        quote! { #enum_ident }
-    } else {
-        let segments = module_idents.iter();
-        quote! { #(#segments)::*::#enum_ident }
-    }
-}
-
 fn effective_module_idents(
     module_path: &[syn::Ident],
     explicit_crate: bool,
