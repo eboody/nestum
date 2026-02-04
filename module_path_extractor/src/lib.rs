@@ -2,12 +2,14 @@
 
 extern crate proc_macro;
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
 use proc_macro::Span;
 use proc_macro2::LineColumn;
-use std::fs;
-use std::path::{Path, PathBuf};
-use syn::spanned::Spanned;
-use syn::Item;
+use syn::{spanned::Spanned, Item};
 
 pub fn get_source_info() -> Option<(String, usize)> {
     let span = Span::call_site().source();
@@ -35,9 +37,7 @@ pub fn module_path_from_file(file_path: &str) -> String {
 
     let without_ext = relative.strip_suffix(".rs").unwrap_or(relative);
     if without_ext.ends_with("/mod") {
-        let parent = without_ext
-            .strip_suffix("/mod")
-            .unwrap_or(without_ext);
+        let parent = without_ext.strip_suffix("/mod").unwrap_or(without_ext);
         let parent = parent.trim_matches('/');
         return parent.replace('/', "::");
     }
@@ -109,15 +109,12 @@ pub fn find_module_path_in_file(
         line >= start && line <= end
     }
 
-    fn visit_items(
-        items: &[Item],
-        line: usize,
-        stack: &mut Vec<String>,
-        best: &mut Vec<String>,
-    ) {
+    fn visit_items(items: &[Item], line: usize, stack: &mut Vec<String>, best: &mut Vec<String>) {
         for item in items {
             let Item::Mod(module) = item else { continue };
-            let Some((_, inner_items)) = &module.content else { continue };
+            let Some((_, inner_items)) = &module.content else {
+                continue;
+            };
             if !span_contains_line(module.span(), line) {
                 continue;
             }

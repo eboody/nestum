@@ -1,11 +1,12 @@
 #![feature(proc_macro_span)]
 
+use std::collections::{HashMap, HashSet};
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use std::collections::{HashMap, HashSet};
 use syn::{
-    parse_macro_input, punctuated::Punctuated, spanned::Spanned, Attribute, ExprMatch, Fields,
-    Item, ItemEnum, Meta, MetaNameValue, Pat, PatOr, PatPath, PatStruct, PatTupleStruct, Token,
+    Attribute, ExprMatch, Fields, Item, ItemEnum, Meta, MetaNameValue, Pat, PatOr, PatPath,
+    PatStruct, PatTupleStruct, Token, parse_macro_input, punctuated::Punctuated, spanned::Spanned,
 };
 
 #[proc_macro_attribute]
@@ -38,7 +39,9 @@ nestum does not accept arguments. Use #[nestum] on enums only",
 #[proc_macro]
 pub fn nestum_match(input: TokenStream) -> TokenStream {
     let expr = parse_macro_input!(input as ExprMatch);
-    expand_match(expr).unwrap_or_else(|err| err.to_compile_error()).into()
+    expand_match(expr)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
 }
 
 #[proc_macro]
@@ -208,15 +211,15 @@ use the enum ident as the field type",
             let (inner_enum, inner_is_marked) =
                 resolve_external_enum(&external_path, current_file, module_root, cache)?
                     .ok_or_else(|| {
-                    syn::Error::new(
-                        external_path.span(),
-                        format!(
-                            "external enum {} not found; \
+                        syn::Error::new(
+                            external_path.span(),
+                            format!(
+                                "external enum {} not found; \
 ensure the module path exists and the enum is declared in that module",
-                            external_path_to_string(&external_path),
-                        ),
-                    )
-                })?;
+                                external_path_to_string(&external_path),
+                            ),
+                        )
+                    })?;
 
             if !inner_is_marked {
                 return Err(syn::Error::new(
@@ -576,7 +579,8 @@ fn rewrite_pat_path(
         current_module,
         enums_by_ident,
         cache,
-    )? else {
+    )?
+    else {
         return Ok(Pat::Path(pat_path));
     };
 
@@ -632,17 +636,28 @@ only #[nestum] enums support nested match patterns",
 
     ensure_inner_variant_exists(&inner_enum_item, &inner_variant)?;
 
-    let outer_module_idents =
-        effective_module_idents(&module_path, explicit_crate, current_module);
+    let outer_module_idents = effective_module_idents(&module_path, explicit_crate, current_module);
     let inner_module_idents = if inner_enum_path.is_empty() {
         outer_module_idents.clone()
     } else {
         effective_module_idents(&inner_enum_path, inner_explicit_crate, current_module)
     };
-    let outer_variant_path =
-        build_path_from_idents(outer_module_idents, &[outer_enum.clone(), outer_enum.clone(), outer_variant.clone()]);
-    let inner_variant_path =
-        build_path_from_idents(inner_module_idents, &[inner_enum_ident.clone(), inner_enum_ident.clone(), inner_variant]);
+    let outer_variant_path = build_path_from_idents(
+        outer_module_idents,
+        &[
+            outer_enum.clone(),
+            outer_enum.clone(),
+            outer_variant.clone(),
+        ],
+    );
+    let inner_variant_path = build_path_from_idents(
+        inner_module_idents,
+        &[
+            inner_enum_ident.clone(),
+            inner_enum_ident.clone(),
+            inner_variant,
+        ],
+    );
 
     let inner_pat = Pat::Path(PatPath {
         attrs: Vec::new(),
@@ -682,7 +697,8 @@ fn rewrite_pat_tuple_struct(
         current_module,
         enums_by_ident,
         cache,
-    )? else {
+    )?
+    else {
         return Ok(Pat::TupleStruct(pat_tuple));
     };
 
@@ -738,17 +754,28 @@ only #[nestum] enums support nested match patterns",
 
     ensure_inner_variant_exists(&inner_enum_item, &inner_variant)?;
 
-    let outer_module_idents =
-        effective_module_idents(&module_path, explicit_crate, current_module);
+    let outer_module_idents = effective_module_idents(&module_path, explicit_crate, current_module);
     let inner_module_idents = if inner_enum_path.is_empty() {
         outer_module_idents.clone()
     } else {
         effective_module_idents(&inner_enum_path, inner_explicit_crate, current_module)
     };
-    let outer_variant_path =
-        build_path_from_idents(outer_module_idents, &[outer_enum.clone(), outer_enum.clone(), outer_variant.clone()]);
-    let inner_variant_path =
-        build_path_from_idents(inner_module_idents, &[inner_enum_ident.clone(), inner_enum_ident.clone(), inner_variant]);
+    let outer_variant_path = build_path_from_idents(
+        outer_module_idents,
+        &[
+            outer_enum.clone(),
+            outer_enum.clone(),
+            outer_variant.clone(),
+        ],
+    );
+    let inner_variant_path = build_path_from_idents(
+        inner_module_idents,
+        &[
+            inner_enum_ident.clone(),
+            inner_enum_ident.clone(),
+            inner_variant,
+        ],
+    );
     let elems = pat_tuple.elems;
 
     let inner_pat = Pat::TupleStruct(PatTupleStruct {
@@ -791,7 +818,8 @@ fn rewrite_pat_struct(
         current_module,
         enums_by_ident,
         cache,
-    )? else {
+    )?
+    else {
         return Ok(Pat::Struct(pat_struct));
     };
 
@@ -847,17 +875,28 @@ only #[nestum] enums support nested match patterns",
 
     ensure_inner_variant_exists(&inner_enum_item, &inner_variant)?;
 
-    let outer_module_idents =
-        effective_module_idents(&module_path, explicit_crate, current_module);
+    let outer_module_idents = effective_module_idents(&module_path, explicit_crate, current_module);
     let inner_module_idents = if inner_enum_path.is_empty() {
         outer_module_idents.clone()
     } else {
         effective_module_idents(&inner_enum_path, inner_explicit_crate, current_module)
     };
-    let outer_variant_path =
-        build_path_from_idents(outer_module_idents, &[outer_enum.clone(), outer_enum.clone(), outer_variant.clone()]);
-    let inner_variant_path =
-        build_path_from_idents(inner_module_idents, &[inner_enum_ident.clone(), inner_enum_ident.clone(), inner_variant]);
+    let outer_variant_path = build_path_from_idents(
+        outer_module_idents,
+        &[
+            outer_enum.clone(),
+            outer_enum.clone(),
+            outer_variant.clone(),
+        ],
+    );
+    let inner_variant_path = build_path_from_idents(
+        inner_module_idents,
+        &[
+            inner_enum_ident.clone(),
+            inner_enum_ident.clone(),
+            inner_variant,
+        ],
+    );
     let fields = pat_struct.fields;
     let rest = pat_struct.rest;
 
@@ -882,7 +921,6 @@ only #[nestum] enums support nested match patterns",
 fn split_nested_path(
     path: &syn::Path,
 ) -> Result<Option<(Vec<syn::Ident>, bool, syn::Ident, syn::Ident, syn::Ident)>, syn::Error> {
-
     let segments: Vec<_> = path.segments.iter().map(|s| s.ident.clone()).collect();
     if segments.len() < 3 {
         return Ok(None);
@@ -978,7 +1016,11 @@ fn resolve_inner_enum_path(
     outer_variant: &syn::Ident,
     enums_by_ident: &HashMap<String, ItemEnum>,
 ) -> Result<Option<(syn::Ident, Vec<syn::Ident>, bool)>, syn::Error> {
-    let Some(variant) = outer_enum.variants.iter().find(|v| v.ident == *outer_variant) else {
+    let Some(variant) = outer_enum
+        .variants
+        .iter()
+        .find(|v| v.ident == *outer_variant)
+    else {
         return Ok(None);
     };
 
@@ -1108,10 +1150,7 @@ fn absolute_module_idents(module_path: &str) -> Vec<syn::Ident> {
         .collect()
 }
 
-fn build_path_from_idents(
-    module_idents: Vec<syn::Ident>,
-    tail: &[syn::Ident],
-) -> syn::Path {
+fn build_path_from_idents(module_idents: Vec<syn::Ident>, tail: &[syn::Ident]) -> syn::Path {
     let mut segments = Vec::new();
     for ident in module_idents.into_iter().chain(tail.iter().cloned()) {
         segments.push(syn::PathSegment {
@@ -1182,7 +1221,7 @@ fn parse_variant_external_path(attrs: &[Attribute]) -> Result<Option<syn::Path>,
                                     return Err(syn::Error::new(
                                         value.span(),
                                         "external must be a string literal",
-                                    ))
+                                    ));
                                 }
                             };
                             let path_str = match lit {
@@ -1191,7 +1230,7 @@ fn parse_variant_external_path(attrs: &[Attribute]) -> Result<Option<syn::Path>,
                                     return Err(syn::Error::new(
                                         value.span(),
                                         "external must be a string literal",
-                                    ))
+                                    ));
                                 }
                             };
                             let parsed: syn::Path =
@@ -1260,15 +1299,12 @@ fn find_module_path_in_file_with_base(
         line >= start && line <= end
     }
 
-    fn visit_items(
-        items: &[Item],
-        line: usize,
-        stack: &mut Vec<String>,
-        best: &mut Vec<String>,
-    ) {
+    fn visit_items(items: &[Item], line: usize, stack: &mut Vec<String>, best: &mut Vec<String>) {
         for item in items {
             let Item::Mod(module) = item else { continue };
-            let Some((_, inner_items)) = &module.content else { continue };
+            let Some((_, inner_items)) = &module.content else {
+                continue;
+            };
             if !span_contains_line(module.span(), line) {
                 continue;
             }
@@ -1436,7 +1472,9 @@ fn collect_enums_by_module_path(
                         .insert(item_enum.ident.to_string(), item_enum.clone());
                 }
                 syn::Item::Mod(module) => {
-                    let Some((_, inner_items)) = &module.content else { continue };
+                    let Some((_, inner_items)) = &module.content else {
+                        continue;
+                    };
                     stack.push(module.ident.to_string());
                     visit_items(inner_items, stack, base, map);
                     stack.pop();
