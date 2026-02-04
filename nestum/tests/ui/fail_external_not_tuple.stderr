@@ -1,5 +1,6 @@
 error: variant Outer::Bad uses #[nestum(external = "...")], but is not a single-field tuple variant
   --> tests/ui/fail_external_not_tuple.rs:10:5
    |
-10 |     Bad,
-   |     ^^^
+10 | /     #[nestum(external = "crate::Inner")]
+11 | |     Bad,
+   | |_______^

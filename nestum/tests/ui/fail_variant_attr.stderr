@@ -1,5 +1,5 @@
 error: invalid #[nestum] on variant; use #[nestum(external = "path::to::Enum")]
-  --> tests/ui/fail_variant_attr.rs:5:5
-   |
-5  |     #[nestum]
-   |     ^^^^^^^^^
+ --> tests/ui/fail_variant_attr.rs:5:5
+  |
+5 |     #[nestum]
+  |     ^^^^^^^^^
