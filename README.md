@@ -1,6 +1,6 @@
 # nestum
 
-`nestum` is a proc-macro that makes *nested enum paths* feel natural, so you can write:
+`nestum` is a proc-macro that makes *nested enum paths and matches* feel natural, so you can write:
 
 ```rust
 Event::Documents::Update
@@ -12,22 +12,39 @@ instead of:
 Event::Documents(DocumentsEvent::Update(...))
 ```
 
-It does this by generating a shadow module hierarchy and wrapper constructors around your enums.
+It does this by generating a shadow module hierarchy and wrapper constructors around your enums, plus a match macro that rewrites nested patterns.
 
 ## Why
-Rust enums are great for modeling state and variants, but nested enum patterns quickly get noisy when you need multiple levels:
+Rust enums are great for modeling state and variants, but nesting them gets noisy fast:
 
 ```rust
 Event::Documents(DocumentsEvent::Update(doc))
 ```
 
-`nestum` removes the visual clutter by letting you access nested variants via paths:
+`nestum` removes the clutter by letting you access nested variants via paths:
 
 ```rust
 Event::Documents::Update(doc)
 ```
 
-You still get the same enum types and matching semantics—you just get cleaner call sites.
+The payoff is biggest in **matching**, where you can read intent at a glance:
+
+```rust
+nested! {
+    match event {
+        Event::Documents::Update(doc) => { /* ... */ }
+        Event::Images::Delete(id) => { /* ... */ }
+    }
+}
+```
+
+You still get the same enum types and semantics—just much cleaner call sites.
+
+Other places this shines:
+- Event routing (webhooks, message buses, job systems).
+- Permission or policy trees (resource + action).
+- Parsers or compilers (node + node-kind).
+- UIs with nested state machines.
 
 ## Quick Start
 
@@ -147,7 +164,7 @@ pub enum Outer {
 let _ = Outer::Wrap::A;
 ```
 
-### Nested match patterns
+### Nested match patterns (front and center)
 ```rust
 use nestum::{nestum, nested};
 
