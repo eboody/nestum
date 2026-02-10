@@ -3,13 +3,13 @@
 `nestum` is a proc-macro that makes *nested enum paths* feel natural, so you can write:
 
 ```rust
-Enum1::Variant1::VariantA
+Event::Documents::Update
 ```
 
 instead of:
 
 ```rust
-Enum1::Variant1(Enum2::VariantA)
+Event::Documents(DocumentsEvent::Update(...))
 ```
 
 It does this by generating a shadow module hierarchy and wrapper constructors around your enums.
@@ -18,13 +18,13 @@ It does this by generating a shadow module hierarchy and wrapper constructors ar
 Rust enums are great for modeling state and variants, but nested enum patterns quickly get noisy when you need multiple levels:
 
 ```rust
-Enum1::Variant1(Enum2::VariantA)
+Event::Documents(DocumentsEvent::Update(doc))
 ```
 
 `nestum` removes the visual clutter by letting you access nested variants via paths:
 
 ```rust
-Enum1::Variant1::VariantA
+Event::Documents::Update(doc)
 ```
 
 You still get the same enum types and matching semantics—you just get cleaner call sites.
@@ -34,24 +34,38 @@ You still get the same enum types and matching semantics—you just get cleaner 
 ```rust
 use nestum::nestum;
 
-#[nestum]
-pub enum Enum2 {
-    VariantA,
-    VariantB(u8),
-    VariantC { x: i32 },
+#[derive(Debug)]
+pub struct Document {
+    pub id: String,
+}
+
+#[derive(Debug)]
+pub struct Image {
+    pub id: String,
 }
 
 #[nestum]
-pub enum Enum1 {
-    Variant1(Enum2),
-    Other,
+pub enum DocumentsEvent {
+    Update(Document),
+    Delete(String),
+}
+
+#[nestum]
+pub enum ImagesEvent {
+    Update(Image),
+    Delete(String),
+}
+
+#[nestum]
+pub enum Event {
+    Documents(DocumentsEvent),
+    Images(ImagesEvent),
 }
 
 fn main() {
-    let _ = Enum1::Variant1::VariantA;
-    let _ = Enum1::Variant1::VariantB(1);
-    let _ = Enum1::Variant1::VariantC(2);
-    let _ = Enum1::Enum1::Other;
+    let doc = Document { id: "doc-1".to_string() };
+    let _ = Event::Documents::Update(doc);
+    let _ = Event::Images::Delete("img-1".to_string());
 }
 ```
 
@@ -105,16 +119,19 @@ Macro that rewrites nested patterns (like `Enum1::Variant1::VariantA`) into real
 
 ## Examples
 
-### Basic nesting
+### Basic nesting (webhook-style)
 ```rust
 #[nestum]
-pub enum Inner { A, B(u8) }
+pub enum DocumentsEvent { Update(Document), Delete(String) }
 
 #[nestum]
-pub enum Outer { Wrap(Inner) }
+pub enum ImagesEvent { Update(Image), Delete(String) }
 
-let _ = Outer::Wrap::A;
-let _ = Outer::Wrap::B(1);
+#[nestum]
+pub enum Event { Documents(DocumentsEvent), Images(ImagesEvent) }
+
+let _ = Event::Documents::Update(doc);
+let _ = Event::Images::Delete("img-1".to_string());
 ```
 
 ### Cross-module nesting
@@ -135,17 +152,29 @@ let _ = Outer::Wrap::A;
 use nestum::{nestum, nested};
 
 #[nestum]
-pub enum Inner { A, B(u8) }
+pub enum DocumentsEvent { Update(Document), Delete(String) }
 
 #[nestum]
-pub enum Outer { Wrap(Inner), Other }
+pub enum ImagesEvent { Update(Image), Delete(String) }
 
-let value = Outer::Wrap::A;
+#[nestum]
+pub enum Event { Documents(DocumentsEvent), Images(ImagesEvent) }
+
+let event = Event::Documents::Update(Document { id: "doc-1".to_string() });
 nested! {
-    match value {
-        Outer::Wrap::A => {}
-        Outer::Wrap::B(n) => { let _ = n; }
-        Outer::Outer::Other => {}
+    match event {
+        Event::Documents::Update(doc) => {
+            let _ = doc.id;
+        }
+        Event::Documents::Delete(id) => {
+            let _ = id;
+        }
+        Event::Images::Update(img) => {
+            let _ = img.id;
+        }
+        Event::Images::Delete(id) => {
+            let _ = id;
+        }
     }
 }
 ```
@@ -168,7 +197,7 @@ nested! {
 Because `nestum` replaces the enum with a module of the same name. The original enum is re-emitted inside it.
 
 ### How do I pattern match with nested paths?
-Use `nested!` (or `nestum_match!`) so paths like `Enum1::Variant1::VariantA` are rewritten to the real enum pattern.
+Use `nested!` (or `nestum_match!`) so paths like `Event::Documents::Update` are rewritten to the real enum pattern.
 
 ### Why not support external crates?
 The macro would need to discover and parse dependency source files, which is brittle and not reliably possible in stable proc-macro APIs.
