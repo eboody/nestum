@@ -2,6 +2,56 @@
 
 `nestum` makes nested enum paths and matches feel natural, so you can codify invariants by nesting related enums while keeping ergonomic construction and matching.
 
+```rust
+use nestum::{nestum, nested};
+
+#[derive(Debug)]
+pub struct Document {
+    pub id: String,
+}
+
+#[derive(Debug)]
+pub struct Image {
+    pub id: String,
+}
+
+#[nestum]
+pub enum DocumentsEvent {
+    Update(Document),
+    Delete(String),
+}
+
+#[nestum]
+pub enum ImagesEvent {
+    Update(Image),
+    Delete(String),
+}
+
+#[nestum]
+pub enum Event {
+    Documents(DocumentsEvent),
+    Images(ImagesEvent),
+}
+
+let event = Event::Documents::Update(Document { id: "doc-1".to_string() });
+nested! {
+    match event {
+        Event::Documents::Update(doc) => {
+            let _ = doc.id;
+        }
+        Event::Documents::Delete(id) => {
+            let _ = id;
+        }
+        Event::Images::Update(img) => {
+            let _ = img.id;
+        }
+        Event::Images::Delete(id) => {
+            let _ = id;
+        }
+    }
+}
+```
+
 Instead of:
 ```rust
 Event::Documents(DocumentsEvent::Update(doc))
@@ -10,17 +60,6 @@ Event::Documents(DocumentsEvent::Update(doc))
 you can write:
 ```rust
 Event::Documents::Update(doc)
-```
-
-The biggest win is matching:
-
-```rust
-nested! {
-    match event {
-        Event::Documents::Update(doc) => { /* ... */ }
-        Event::Images::Delete(id) => { /* ... */ }
-    }
-}
 ```
 
 It works by generating a shadow module hierarchy and wrapper constructors, plus a match macro that rewrites nested patterns.
@@ -151,7 +190,7 @@ pub enum Outer {
 let _ = Outer::Wrap::A;
 ```
 
-### Nested match patterns (front and center)
+### Nested match patterns
 ```rust
 use nestum::{nestum, nested};
 
