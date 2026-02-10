@@ -1,0 +1,7 @@
+error: no enums found for current module path; ensure the enum is defined in the same source file and module as the macro call
+ --> tests/ui/fail_include.rs:8:1
+  |
+8 | #[nestum]
+  | ^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `nestum` (in Nightly builds, run with -Z macro-backtrace for more info)
