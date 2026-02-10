@@ -1,0 +1,5 @@
+error: external must be a string literal
+ --> tests/ui/fail_external_non_string.rs:8:25
+  |
+8 |     #[nestum(external = 123)]
+  |                         ^^^

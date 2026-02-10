@@ -1112,7 +1112,13 @@ fn effective_module_idents(
         segments.remove(0);
     }
     let base = segments.join("::");
-    let full = if is_crate || explicit_crate || current_module == "crate" {
+    let full = if is_crate || explicit_crate {
+        if base.is_empty() {
+            "crate".to_string()
+        } else {
+            format!("crate::{base}")
+        }
+    } else if current_module == "crate" {
         base
     } else if base.is_empty() {
         current_module.to_string()

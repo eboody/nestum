@@ -1,0 +1,7 @@
+error: external enum must be marked with #[nestum] to enable nesting
+ --> tests/ui/fail_external_not_marked.rs:7:1
+  |
+7 | #[nestum]
+  | ^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `nestum` (in Nightly builds, run with -Z macro-backtrace for more info)
