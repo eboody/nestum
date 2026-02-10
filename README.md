@@ -1,6 +1,6 @@
 # nestum
 
-`nestum` makes nested enum paths and matches feel natural.
+`nestum` makes nested enum paths and matches feel natural, so you can codify invariants by nesting related enums while keeping ergonomic construction and matching.
 
 Instead of:
 ```rust
@@ -30,6 +30,8 @@ Where this pays off:
 - Permission or policy trees (resource + action).
 - Parsers/compilers (node + kind).
 - UIs with nested state machines.
+
+The point is to encode invariants as nested enums (this variant always contains this family of sub-variants) without paying a readability or ergonomics tax when constructing or matching.
 
 ## Quick Start
 
