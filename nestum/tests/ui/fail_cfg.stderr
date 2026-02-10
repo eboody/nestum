@@ -1,0 +1,19 @@
+error[E0433]: failed to resolve: could not find `inner` in the crate root
+  --> tests/ui/fail_cfg.rs:11:1
+   |
+11 | #[nestum]
+   | ^^^^^^^^^ could not find `inner` in the crate root
+   |
+note: found an item that was configured out
+  --> tests/ui/fail_cfg.rs:4:5
+   |
+ 3 | #[cfg(false)]
+   |       ----- the item is gated here
+ 4 | mod inner {
+   |     ^^^^^
+   = note: this error originates in the attribute macro `nestum` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: there is an enum variant `syn::AttrStyle::Inner`; try using the variant's enum
+   |
+11 - #[nestum]
+11 + syn::AttrStyle
+   |

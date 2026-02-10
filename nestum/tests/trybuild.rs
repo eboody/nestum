@@ -21,4 +21,7 @@ fn ui() {
     t.compile_fail("tests/ui/fail_external_empty_args.rs");
     t.compile_fail("tests/ui/fail_external_type_not_ident.rs");
     t.compile_fail("tests/ui/fail_external_not_marked.rs");
+    t.compile_fail("tests/ui/fail_path_attr.rs");
+    t.compile_fail("tests/ui/fail_include.rs");
+    t.compile_fail("tests/ui/fail_cfg.rs");
 }

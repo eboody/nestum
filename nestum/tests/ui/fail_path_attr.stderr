@@ -1,0 +1,5 @@
+error: couldn't read `$DIR/tests/ui/missing_inner.rs`: No such file or directory (os error 2)
+ --> tests/ui/fail_path_attr.rs:4:1
+  |
+4 | mod inner;
+  | ^^^^^^^^^^
