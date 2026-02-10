@@ -136,7 +136,7 @@ Macro that rewrites nested patterns (like `Enum1::Variant1::VariantA`) into real
 
 ## Examples
 
-### Basic nesting (webhook-style)
+### Basic nesting
 ```rust
 #[nestum]
 pub enum DocumentsEvent { Update(Document), Delete(String) }
