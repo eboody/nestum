@@ -1,0 +1,5 @@
+error: field type Option does not match external enum path crate::inner::Inner; use the enum ident as the field type
+  --> tests/ui/fail_external_type_not_ident.rs:13:10
+   |
+13 |     Wrap(Option<Inner>),
+   |          ^^^^^^^^^^^^^

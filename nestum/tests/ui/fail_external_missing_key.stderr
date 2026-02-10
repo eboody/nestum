@@ -1,0 +1,5 @@
+error: invalid #[nestum(...)] on variant; expected external = "path::to::Enum"
+ --> tests/ui/fail_external_missing_key.rs:8:5
+  |
+8 |     #[nestum(foo = "bar")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^

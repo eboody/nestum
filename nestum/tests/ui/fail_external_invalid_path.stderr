@@ -1,0 +1,5 @@
+error: external must be a valid Rust path, e.g. "crate::foo::Enum"
+ --> tests/ui/fail_external_invalid_path.rs:8:25
+  |
+8 |     #[nestum(external = "crate::")] // invalid path
+  |                         ^^^^^^^^^

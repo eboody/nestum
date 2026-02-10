@@ -1,0 +1,7 @@
+error: nestum can only be applied to enums
+ --> tests/ui/fail_non_enum.rs:4:1
+  |
+4 | / struct NotAnEnum {
+5 | |     x: i32,
+6 | | }
+  | |_^

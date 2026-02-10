@@ -1,0 +1,5 @@
+error: invalid #[nestum] on variant; use #[nestum(external = "path::to::Enum")]
+ --> tests/ui/fail_external_empty_args.rs:8:5
+  |
+8 |     #[nestum()]
+  |     ^^^^^^^^^^^
