@@ -9,6 +9,7 @@ fn ui() {
     t.pass("tests/ui/pass_match_struct.rs");
     t.pass("tests/ui/pass_match_or.rs");
     t.pass("tests/ui/pass_match_module.rs");
+    t.pass("tests/ui/pass_match_mixed.rs");
     t.compile_fail("tests/ui/fail_enum_args.rs");
     t.compile_fail("tests/ui/fail_variant_attr.rs");
     t.compile_fail("tests/ui/fail_external_not_tuple.rs");
