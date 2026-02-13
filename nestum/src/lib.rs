@@ -567,6 +567,20 @@ fn rewrite_pat_path(
     let Some((module_path, explicit_crate, outer_enum, outer_variant, inner_variant)) =
         split_nested_path(&pat_path.path)?
     else {
+        if let Some(new_path) = rewrite_outer_variant_path(
+            &pat_path.path,
+            current_file,
+            module_root,
+            current_module,
+            enums_by_ident,
+            cache,
+        )? {
+            return Ok(Pat::Path(PatPath {
+                attrs: pat_path.attrs,
+                qself: pat_path.qself,
+                path: new_path,
+            }));
+        }
         return Ok(Pat::Path(pat_path));
     };
 
@@ -685,6 +699,22 @@ fn rewrite_pat_tuple_struct(
     let Some((module_path, explicit_crate, outer_enum, outer_variant, inner_variant)) =
         split_nested_path(&pat_tuple.path)?
     else {
+        if let Some(new_path) = rewrite_outer_variant_path(
+            &pat_tuple.path,
+            current_file,
+            module_root,
+            current_module,
+            enums_by_ident,
+            cache,
+        )? {
+            return Ok(Pat::TupleStruct(PatTupleStruct {
+                attrs: pat_tuple.attrs,
+                qself: pat_tuple.qself,
+                path: new_path,
+                paren_token: pat_tuple.paren_token,
+                elems: pat_tuple.elems,
+            }));
+        }
         return Ok(Pat::TupleStruct(pat_tuple));
     };
 
@@ -806,6 +836,23 @@ fn rewrite_pat_struct(
     let Some((module_path, explicit_crate, outer_enum, outer_variant, inner_variant)) =
         split_nested_path(&pat_struct.path)?
     else {
+        if let Some(new_path) = rewrite_outer_variant_path(
+            &pat_struct.path,
+            current_file,
+            module_root,
+            current_module,
+            enums_by_ident,
+            cache,
+        )? {
+            return Ok(Pat::Struct(PatStruct {
+                attrs: pat_struct.attrs,
+                qself: pat_struct.qself,
+                path: new_path,
+                brace_token: pat_struct.brace_token,
+                fields: pat_struct.fields,
+                rest: pat_struct.rest,
+            }));
+        }
         return Ok(Pat::Struct(pat_struct));
     };
 
@@ -941,6 +988,88 @@ fn split_nested_path(
         segments[variant_idx].clone(),
         segments[inner_idx].clone(),
     )))
+}
+
+fn split_outer_variant_path(
+    path: &syn::Path,
+) -> Option<(Vec<syn::Ident>, bool, syn::Ident, syn::Ident)> {
+    let segments: Vec<_> = path.segments.iter().map(|s| s.ident.clone()).collect();
+    if segments.len() < 2 {
+        return None;
+    }
+
+    let outer_idx = segments.len() - 2;
+    let variant_idx = segments.len() - 1;
+    let module_path = segments[..outer_idx].to_vec();
+    let explicit_crate = module_path
+        .first()
+        .map(|ident| ident == "crate")
+        .unwrap_or(false);
+    Some((
+        module_path,
+        explicit_crate,
+        segments[outer_idx].clone(),
+        segments[variant_idx].clone(),
+    ))
+}
+
+fn rewrite_outer_variant_path(
+    path: &syn::Path,
+    current_file: &str,
+    module_root: &std::path::Path,
+    current_module: &str,
+    enums_by_ident: &HashMap<String, ItemEnum>,
+    cache: &mut HashMap<String, HashMap<String, ItemEnum>>,
+) -> Result<Option<syn::Path>, syn::Error> {
+    let Some((module_path, explicit_crate, outer_enum, outer_variant)) =
+        split_outer_variant_path(path)
+    else {
+        return Ok(None);
+    };
+
+    let Some(outer_info) = resolve_enum_from_path(
+        &module_path,
+        explicit_crate,
+        &outer_enum,
+        current_file,
+        module_root,
+        current_module,
+        enums_by_ident,
+        cache,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    let (outer_enum_item, outer_marked) = outer_info;
+    if !outer_marked {
+        return Ok(None);
+    }
+
+    if !outer_enum_item
+        .variants
+        .iter()
+        .any(|v| v.ident == outer_variant)
+    {
+        return Err(syn::Error::new(
+            path.span(),
+            format!(
+                "variant {} not found on enum {}",
+                outer_variant, outer_enum
+            ),
+        ));
+    }
+
+    let outer_module_idents = effective_module_idents(&module_path, explicit_crate, current_module);
+    let outer_variant_path = build_path_from_idents(
+        outer_module_idents,
+        &[
+            outer_enum.clone(),
+            outer_enum.clone(),
+            outer_variant.clone(),
+        ],
+    );
+    Ok(Some(outer_variant_path))
 }
 
 fn resolve_enum_from_path(
