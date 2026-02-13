@@ -1,6 +1,6 @@
 # nestum
 
-`nestum` makes nested enum paths and matches feel natural, so you can codify invariants by nesting related enums while keeping ergonomic construction and matching.
+**nestum** makes nested enum paths and matches ergonomic in Rust, so you can encode invariants with nested enums without paying a readability tax.
 
 ```rust
 use nestum::{nestum, nested};
@@ -62,26 +62,34 @@ you can write:
 Event::Documents::Update(doc)
 ```
 
+## Why Use nestum?
+- **Codify invariants**: express “this variant always contains this family of sub-variants.”
+- **Readable matches**: nested paths keep intent obvious in large match statements.
+- **Low boilerplate**: minimal annotations, no custom enums or manual conversions.
+
 Where this pays off:
 - Event routing and message buses.
 - Permission or policy trees (resource + action).
-- Parsers/compilers (node + kind).
+- Parsers and ASTs (node + kind).
 - UIs with nested state machines.
 
-The point is to encode invariants as nested enums (this variant always contains this family of sub-variants) without paying a readability or ergonomics tax when constructing or matching.
+## Table of Contents
+- [Quick Start](#quick-start)
+- [Features & Examples](#features--examples)
+  - [Basic Nesting](#1-basic-nesting)
+  - [Nested Match Patterns](#2-nested-match-patterns)
+  - [Cross-Module Nesting](#3-cross-module-nesting)
+- [Common Errors and Tips](#common-errors-and-tips)
+- [API Reference](#api-reference)
+- [License](#license)
 
-## How To Use
+## Quick Start
 
 ```rust
 use nestum::nestum;
 
 #[derive(Debug)]
 pub struct Document {
-    pub id: String,
-}
-
-#[derive(Debug)]
-pub struct Image {
     pub id: String,
 }
 
@@ -92,30 +100,59 @@ pub enum DocumentsEvent {
 }
 
 #[nestum]
-pub enum ImagesEvent {
-    Update(Image),
-    Delete(String),
-}
-
-#[nestum]
 pub enum Event {
     Documents(DocumentsEvent),
-    Images(ImagesEvent),
 }
 
 fn main() {
     let doc = Document { id: "doc-1".to_string() };
     let _ = Event::Documents::Update(doc);
-    let _ = Event::Images::Delete("img-1".to_string());
 }
 ```
 
-## Cross-Module Nesting
-To nest an enum declared in a different module file, use an external path on the variant:
+## Features & Examples
 
+### 1. Basic Nesting
 ```rust
-use nestum::nestum;
+#[nestum]
+pub enum DocumentsEvent { Update(Document), Delete(String) }
 
+#[nestum]
+pub enum ImagesEvent { Update(Image), Delete(String) }
+
+#[nestum]
+pub enum Event { Documents(DocumentsEvent), Images(ImagesEvent) }
+
+let _ = Event::Documents::Update(doc);
+let _ = Event::Images::Delete("img-1".to_string());
+```
+
+### 2. Nested Match Patterns
+```rust
+use nestum::{nestum, nested};
+
+#[nestum]
+pub enum DocumentsEvent { Update(Document), Delete(String) }
+
+#[nestum]
+pub enum ImagesEvent { Update(Image), Delete(String) }
+
+#[nestum]
+pub enum Event { Documents(DocumentsEvent), Images(ImagesEvent) }
+
+let event = Event::Documents::Update(Document { id: "doc-1".to_string() });
+nested! {
+    match event {
+        Event::Documents::Update(doc) => { let _ = doc.id; }
+        Event::Documents::Delete(id) => { let _ = id; }
+        Event::Images::Update(img) => { let _ = img.id; }
+        Event::Images::Delete(id) => { let _ = id; }
+    }
+}
+```
+
+### 3. Cross-Module Nesting
+```rust
 mod inner;
 
 #[nestum]
@@ -124,12 +161,17 @@ pub enum Outer {
     Wrap(Inner),
 }
 
-fn main() {
 let _ = Outer::Wrap::A;
-}
 ```
 
-## API Summary
+## Common Errors and Tips
+- **Only enums are supported**: `#[nestum]` must be on an enum.
+- **External enums require an explicit path**: use `#[nestum(external = "crate::path::Enum")]`.
+- **Nested enums must be marked**: both the parent and inner enum must have `#[nestum]`.
+- **Unsupported layouts**: `#[path = "..."]`, `include!()`, and complex `cfg` module layouts may not resolve.
+- **External crates** are not supported (proc macros cannot reliably inspect dependency sources).
+
+## API Reference
 
 ### `#[nestum]` on enums
 Enables nested paths and match rewriting.
@@ -138,12 +180,7 @@ Enables nested paths and match rewriting.
 Opt-in support for nesting an enum in another module file.
 
 ### `nestum_match! { match value { ... } }` / `nested! { match value { ... } }`
-Macro that rewrites nested patterns (like `Event::Documents::Update`) into real enum patterns.
-
-## Limitations
-- External crates are not supported (proc macros can’t reliably inspect other crates’ ASTs).
-- The macro only resolves enums from source files in the current crate.
-- `#[path = "..."]`, `include!()`, and complex `cfg` layouts may not be resolved.
+Rewrites nested patterns (like `Event::Documents::Update`) into real enum patterns.
 
 ## License
 MIT
