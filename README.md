@@ -176,11 +176,53 @@ let _ = Outer::Wrap::A;
 ### `#[nestum]` on enums
 Enables nested paths and match rewriting.
 
+```rust
+use nestum::nestum;
+
+#[nestum]
+pub enum Inner { A, B }
+
+#[nestum]
+pub enum Outer { Wrap(Inner) }
+
+let _ = Outer::Wrap::A;
+```
+
 ### `#[nestum(external = "path::to::Enum")]` on variants
 Opt-in support for nesting an enum in another module file.
 
+```rust
+use nestum::nestum;
+
+mod inner;
+
+#[nestum]
+pub enum Outer {
+    #[nestum(external = "crate::inner::Inner")]
+    Wrap(Inner),
+}
+```
+
 ### `nestum_match! { match value { ... } }` / `nested! { match value { ... } }`
 Rewrites nested patterns (like `Event::Documents::Update`) into real enum patterns.
+
+```rust
+use nestum::{nestum, nested};
+
+#[nestum]
+pub enum Inner { A, B }
+
+#[nestum]
+pub enum Outer { Wrap(Inner) }
+
+let value = Outer::Wrap::A;
+nested! {
+    match value {
+        Outer::Wrap::A => {}
+        Outer::Wrap::B => {}
+    }
+}
+```
 
 ## License
 MIT
