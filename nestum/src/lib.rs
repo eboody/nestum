@@ -1053,10 +1053,7 @@ fn rewrite_outer_variant_path(
     {
         return Err(syn::Error::new(
             path.span(),
-            format!(
-                "variant {} not found on enum {}",
-                outer_variant, outer_enum
-            ),
+            format!("variant {} not found on enum {}", outer_variant, outer_enum),
         ));
     }
 
