@@ -13,7 +13,7 @@ pub enum Outer {
 }
 
 fn main() {
-    let value = Outer::Wrap::Struct(5);
+    let value = nested! { Outer::Wrap::Struct { x: 5 } };
     nested! {
         match value {
             Outer::Wrap::Unit => {}

@@ -1,6 +1,6 @@
 [package]
 name = "nestum"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2024"
 description = "Proc-macro for nested enum paths like Enum1::Variant1::VariantA"
 license = "MIT"
@@ -11,10 +11,13 @@ readme = "../README.md"
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1"
+darling = "0.21"
+module_path_extractor = "0.3.16"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+proc-macro-error2 = "2"
 quote = "1"
-syn = { version = "2", features = ["full", "extra-traits"] }
-module_path_extractor = "0.2.2"
+syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }
 
 [dev-dependencies]
+prettyplease = "0.2"
 trybuild = "1"

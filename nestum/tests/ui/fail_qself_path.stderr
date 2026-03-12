@@ -1,0 +1,14 @@
+error: nested enum type cannot use qualified self or associated paths; use a plain enum path like Inner or crate::inner::Inner
+  --> tests/ui/fail_qself_path.rs:20:10
+   |
+20 |     Wrap(<Marker as HasNested>::Nested),
+   |          ^
+
+error[E0573]: expected type, found module `Inner`
+  --> tests/ui/fail_qself_path.rs:15:19
+   |
+15 |     type Nested = Inner;
+   |                   ^^^^^
+   |                   |
+   |                   not a type
+   |                   help: try using the variant's enum: `syn::AttrStyle`

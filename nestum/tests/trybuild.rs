@@ -10,7 +10,20 @@ fn ui() {
     t.pass("tests/ui/pass_match_or.rs");
     t.pass("tests/ui/pass_match_module.rs");
     t.pass("tests/ui/pass_match_mixed.rs");
+    t.pass("tests/ui/pass_control_flow.rs");
+    t.pass("tests/ui/pass_envelope_semantics.rs");
+    t.pass("tests/ui/pass_expr_struct.rs");
+    t.pass("tests/ui/pass_generic_nesting.rs");
+    t.pass("tests/ui/pass_lifetime_where.rs");
+    t.pass("tests/ui/pass_qualified_type_path.rs");
+    t.pass("tests/ui/pass_qualified_type_path_generics.rs");
+    t.pass("tests/ui/pass_recursive_nested.rs");
+    t.pass("tests/ui/pass_theme_color.rs");
+    t.pass("tests/ui/pass_namespaced_attr.rs");
+    t.pass("tests/ui/pass_derive.rs");
     t.compile_fail("tests/ui/fail_enum_args.rs");
+    t.compile_fail("tests/ui/fail_reserved_enum_variant.rs");
+    t.compile_fail("tests/ui/fail_nested_root_constructor.rs");
     t.compile_fail("tests/ui/fail_variant_attr.rs");
     t.compile_fail("tests/ui/fail_external_not_tuple.rs");
     t.compile_fail("tests/ui/fail_external_mismatch.rs");
@@ -25,4 +38,7 @@ fn ui() {
     t.compile_fail("tests/ui/fail_path_attr.rs");
     t.compile_fail("tests/ui/fail_include.rs");
     t.compile_fail("tests/ui/fail_cfg.rs");
+    t.compile_fail("tests/ui/fail_qself_path.rs");
+    t.compile_fail("tests/ui/fail_self_path.rs");
+    t.compile_fail("tests/ui/fail_super_path.rs");
 }

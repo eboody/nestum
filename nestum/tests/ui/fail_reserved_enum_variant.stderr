@@ -1,0 +1,5 @@
+error: variant Outer::Enum is not supported; `Enum` is reserved by #[nestum] for the explicit enum type path
+  --> tests/ui/fail_reserved_enum_variant.rs:10:5
+   |
+10 |     Enum(Inner),
+   |     ^^^^

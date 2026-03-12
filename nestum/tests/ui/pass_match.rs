@@ -20,7 +20,7 @@ fn main() {
             Outer::Wrap::VariantB(n) => {
                 let _ = n;
             }
-            Outer::Outer::Other => {}
+            Outer::Other => {}
         }
     }
 }

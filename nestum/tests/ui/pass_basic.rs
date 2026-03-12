@@ -1,4 +1,4 @@
-use nestum::nestum;
+use nestum::{nestum, nested};
 
 #[nestum]
 pub enum Enum2 {
@@ -14,8 +14,10 @@ pub enum Enum1 {
 }
 
 fn main() {
+    let explicit: Enum1::Enum = Enum1::Enum::Variant1(Enum2::Enum::VariantA);
     let _ = Enum1::Variant1::VariantA;
     let _ = Enum1::Variant1::VariantB(1);
-    let _ = Enum1::Variant1::VariantC(2);
-    let _ = Enum1::Enum1::Other;
+    let _ = nested! { Enum1::Variant1::VariantC { x: 2 } };
+    let _ = Enum1::Other;
+    let _ = explicit;
 }

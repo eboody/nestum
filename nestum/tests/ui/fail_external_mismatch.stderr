@@ -3,3 +3,11 @@ error: field type Other does not match external enum path crate::a::Inner; use t
    |
 15 |     Wrap(Other),
    |          ^^^^^
+
+warning: unused import: `A`
+ --> tests/ui/fail_external_mismatch.rs:8:9
+  |
+8 |         A,
+  |         ^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

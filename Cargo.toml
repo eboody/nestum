@@ -1,3 +1,3 @@
 [workspace]
-members = ["module_path_extractor", "nestum"]
+members = ["nestum", "nestum-examples"]
 resolver = "2"

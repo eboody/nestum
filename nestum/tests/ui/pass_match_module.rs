@@ -11,7 +11,7 @@ mod api {
         Wrap(Inner),
     }
 
-    pub fn check(value: Outer::Outer) {
+    pub fn check(value: Outer::Enum) {
         nested! {
             match value {
                 crate::api::Outer::Wrap::A => {}

@@ -1,0 +1,15 @@
+error[E0423]: expected function, tuple struct or tuple variant, found module `Outer::Wrap`
+  --> tests/ui/fail_nested_root_constructor.rs:16:13
+   |
+16 |     let _ = Outer::Wrap(inner);
+   |             ^^^^^^^^^^^ not a function, tuple struct or tuple variant
+   |
+help: consider importing this tuple variant instead
+   |
+ 1 + use crate::Outer::__NestumOuter::Wrap;
+   |
+help: if you import `Wrap`, refer to it directly
+   |
+16 -     let _ = Outer::Wrap(inner);
+16 +     let _ = Wrap(inner);
+   |
