@@ -5,11 +5,3 @@ error: unable to locate module file for inner; expected inner.rs or inner/mod.rs
   | ^^^^^^^^^
   |
   = note: this error originates in the attribute macro `nestum` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: unused import: `A`
- --> tests/ui/inner_included.rs
-  |
-  |     A,
-  |     ^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

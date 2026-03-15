@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "nestum"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "darling",
  "module_path_extractor",
@@ -838,13 +838,16 @@ dependencies = [
  "proc-macro-error2",
  "proc-macro2",
  "quote",
+ "serde",
+ "serde_json",
  "syn",
+ "thiserror",
  "trybuild",
 ]
 
 [[package]]
 name = "nestum-examples"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "clap",

@@ -21,6 +21,9 @@ fn ui() {
     t.pass("tests/ui/pass_theme_color.rs");
     t.pass("tests/ui/pass_namespaced_attr.rs");
     t.pass("tests/ui/pass_derive.rs");
+    t.pass("tests/ui/pass_scope.rs");
+    t.pass("tests/ui/pass_self_path.rs");
+    t.pass("tests/ui/pass_super_path.rs");
     t.compile_fail("tests/ui/fail_enum_args.rs");
     t.compile_fail("tests/ui/fail_reserved_enum_variant.rs");
     t.compile_fail("tests/ui/fail_nested_root_constructor.rs");
@@ -39,6 +42,6 @@ fn ui() {
     t.compile_fail("tests/ui/fail_include.rs");
     t.compile_fail("tests/ui/fail_cfg.rs");
     t.compile_fail("tests/ui/fail_qself_path.rs");
-    t.compile_fail("tests/ui/fail_self_path.rs");
-    t.compile_fail("tests/ui/fail_super_path.rs");
+    t.compile_fail("tests/ui/fail_scope_item.rs");
+    t.compile_fail("tests/ui/fail_scope_mod_decl.rs");
 }

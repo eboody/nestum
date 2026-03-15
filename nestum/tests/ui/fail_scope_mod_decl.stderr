@@ -1,0 +1,13 @@
+error[E0658]: file modules in proc macro input are unstable
+ --> tests/ui/fail_scope_mod_decl.rs:4:1
+  |
+4 | mod external_mod;
+  | ^^^^^^^^^^^^^^^^^
+  |
+  = note: see issue #54727 <https://github.com/rust-lang/rust/issues/54727> for more information
+
+error: #[nestum_scope] requires an inline module body; use it on `mod name { ... }`, not `mod name;`
+ --> tests/ui/fail_scope_mod_decl.rs:4:1
+  |
+4 | mod external_mod;
+  | ^^^

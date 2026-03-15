@@ -76,41 +76,23 @@ mod tests {
 
     #[test]
     fn clap_parses_nested_subcommands() {
-        let cli = Cli::try_parse_from([
-            "ops-console",
-            "users",
-            "create",
-            "dev@example.com",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["ops-console", "users", "create", "dev@example.com"]).unwrap();
 
         assert_eq!(run(cli), "create-user:dev@example.com");
     }
 
     #[test]
     fn clap_handles_struct_variants_and_dispatch() {
-        let cli = Cli::try_parse_from([
-            "ops-console",
-            "billing",
-            "refund",
-            "42",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["ops-console", "billing", "refund", "42"]).unwrap();
 
         assert_eq!(run(cli), "refund-invoice:42");
     }
 
     #[test]
     fn clap_handles_deeper_nested_dispatch() {
-        let cli = Cli::try_parse_from([
-            "ops-console",
-            "billing",
-            "charge",
-            "7",
-            "--cents",
-            "1200",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["ops-console", "billing", "charge", "7", "--cents", "1200"])
+            .unwrap();
 
         assert_eq!(run(cli), "charge-invoice:7:1200c");
     }

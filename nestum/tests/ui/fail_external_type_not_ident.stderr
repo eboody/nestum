@@ -3,11 +3,3 @@ error: nested enum type must be a simple ident when using #[nestum(external = ".
    |
 13 |     Wrap(Option<Inner>),
    |          ^^^^^^
-
-warning: unused import: `A`
- --> tests/ui/fail_external_type_not_ident.rs:7:22
-  |
-7 |     pub enum Inner { A }
-  |                      ^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

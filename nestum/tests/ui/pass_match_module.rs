@@ -21,5 +21,6 @@ mod api {
 }
 
 fn main() {
+    let _ = api::Inner::A;
     api::check(api::Outer::Wrap::A);
 }

@@ -20,5 +20,5 @@ where
 fn main() {
     let value = 7u32;
     let _wrapped: Outer::Enum<'_, u32> = Outer::Wrap::Ref(&value);
-    let _other: Outer::Enum<'_, u32> = Outer::Other;
+    let _other: Outer::Enum<'_, u32> = Outer::Other();
 }

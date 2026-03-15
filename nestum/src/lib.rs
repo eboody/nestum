@@ -4,26 +4,37 @@ use std::sync::{Mutex, OnceLock};
 use darling::FromMeta;
 use darling::ast::NestedMeta;
 use module_path_extractor::{
-    get_source_info as extractor_get_source_info,
-    module_path_from_file_with_root, module_path_to_file, module_root_from_file,
+    get_source_info as extractor_get_source_info, module_path_from_file_with_root,
+    module_path_to_file, module_root_from_file,
 };
 use proc_macro::TokenStream;
 use proc_macro_error2::proc_macro_error;
 use quote::{format_ident, quote};
 use syn::{
     Attribute, Expr, ExprBlock, ExprCall, ExprLet, ExprMacro, ExprMatch, ExprPath, ExprStruct,
-    Fields, Item, ItemEnum, Local, Meta, Pat, PatOr, PatPath, PatStruct, PatTupleStruct,
-    Stmt, Token, parse::{Parse, ParseStream}, parse_macro_input, punctuated::Punctuated,
-    spanned::Spanned, visit_mut::{self, VisitMut},
+    Fields, ImplItemFn, Item, ItemEnum, ItemMod, Local, Meta, Pat, PatOr, PatPath, PatStruct,
+    PatTupleStruct, Stmt, Token, TraitItemFn,
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    punctuated::Punctuated,
+    spanned::Spanned,
+    visit_mut::{self, VisitMut},
 };
 
 type EnumMap = HashMap<String, ItemEnum>;
 type ModuleEnumCache = HashMap<String, EnumMap>;
 
+#[derive(Clone, Copy)]
+enum ModulePathBase {
+    Current,
+    Crate,
+    Super(usize),
+}
+
 #[derive(Clone)]
 struct PlainEnumPath {
+    path_base: ModulePathBase,
     module_path: Vec<syn::Ident>,
-    explicit_crate: bool,
     enum_ident: syn::Ident,
     enum_arguments: syn::PathArguments,
 }
@@ -101,7 +112,7 @@ pub fn nestum_match(input: TokenStream) -> TokenStream {
                 err.span(),
                 format!(
                     "nestum_match! expects a `match` expression; \
-use nested! for constructors, if let, while let, let-else, and matches!: {err}"
+use nested! or #[nestum_scope] for constructors, if let, while let, let-else, and matches!: {err}"
                 ),
             )
             .to_compile_error()
@@ -122,6 +133,46 @@ pub fn nested(input: TokenStream) -> TokenStream {
         .into()
 }
 
+#[proc_macro_error]
+#[proc_macro_attribute]
+pub fn nestum_scope(args: TokenStream, input: TokenStream) -> TokenStream {
+    if !args.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "nestum_scope does not accept arguments; use #[nestum_scope] on functions, impl methods, impl blocks, or inline modules",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let input = proc_macro2::TokenStream::from(input);
+
+    if let Ok(mut item) = syn::parse2::<Item>(input.clone()) {
+        return rewrite_scope_item_tokens(&mut item)
+            .unwrap_or_else(|err| err.to_compile_error())
+            .into();
+    }
+
+    if let Ok(mut item_fn) = syn::parse2::<ImplItemFn>(input.clone()) {
+        return rewrite_scope_impl_item_fn_tokens(&mut item_fn)
+            .unwrap_or_else(|err| err.to_compile_error())
+            .into();
+    }
+
+    if let Ok(mut item_fn) = syn::parse2::<TraitItemFn>(input) {
+        return rewrite_scope_trait_item_fn_tokens(&mut item_fn)
+            .unwrap_or_else(|err| err.to_compile_error())
+            .into();
+    }
+
+    syn::Error::new(
+        proc_macro2::Span::call_site(),
+        "#[nestum_scope] can only be applied to functions, impl methods, impl blocks, or inline modules",
+    )
+    .to_compile_error()
+    .into()
+}
+
 enum NestedInput {
     Expr(Expr),
     Stmts(Vec<Stmt>),
@@ -138,7 +189,8 @@ fn parse_nested_input(tokens: proc_macro2::TokenStream) -> syn::Result<NestedInp
             err.span(),
             format!(
                 "nested! expects an expression or a statement block; \
-for let-else, pass statements directly inside nested! {{ ... }}: {err}"
+for let-else, pass statements directly inside nested! {{ ... }}; \
+for broader rewriting, use #[nestum_scope] on the enclosing function, impl, or inline module: {err}"
             ),
         )
     })?;
@@ -227,7 +279,8 @@ fn absolutize_source_path(file_path: &str) -> String {
 }
 
 fn strip_nestum_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
-    attrs.iter()
+    attrs
+        .iter()
         .filter(|attr| !is_nestum_attr_path(attr.path()))
         .cloned()
         .collect()
@@ -243,7 +296,11 @@ fn cleaned_enum_item(item: &ItemEnum, variants: Vec<syn::Variant>) -> ItemEnum {
 
 fn ensure_reserved_generated_names_available(item: &ItemEnum) -> Result<(), syn::Error> {
     let reserved = generated_enum_alias_ident();
-    if let Some(variant) = item.variants.iter().find(|variant| variant.ident == reserved) {
+    if let Some(variant) = item
+        .variants
+        .iter()
+        .find(|variant| variant.ident == reserved)
+    {
         return Err(syn::Error::new(
             variant.ident.span(),
             format!(
@@ -267,8 +324,7 @@ fn expand_enum(item: ItemEnum) -> Result<proc_macro2::TokenStream, syn::Error> {
                 .map(|(path, _)| path)
                 .or_else(|| source_key.clone());
             if let Some(source_file) = source_file.as_deref()
-                && let Some(expanded) =
-                    try_expand_enum_from_source_file(item.clone(), source_file)?
+                && let Some(expanded) = try_expand_enum_from_source_file(item.clone(), source_file)?
             {
                 return Ok(expanded);
             }
@@ -375,6 +431,169 @@ ensure the enum is defined in the same source file and module as the macro call"
     Ok(quote! { #expr })
 }
 
+fn collect_module_cache(
+    file_path: &str,
+    module_root: &std::path::Path,
+) -> Result<ModuleEnumCache, syn::Error> {
+    let mut cache: ModuleEnumCache = HashMap::new();
+    let all = collect_enums_by_module_path(file_path, module_root, file_path)?;
+    for (module, enums) in all.into_iter() {
+        cache.insert(module, enums);
+    }
+    Ok(cache)
+}
+
+fn enums_for_exact_module(cache: &ModuleEnumCache, module_path: &str) -> EnumMap {
+    cache.get(module_path).cloned().unwrap_or_default()
+}
+
+fn child_module_path(parent_module: &str, child_ident: &syn::Ident) -> String {
+    if parent_module == "crate" {
+        child_ident.to_string()
+    } else {
+        format!("{parent_module}::{child_ident}")
+    }
+}
+
+fn with_scope_rewriter<F>(
+    current_file: &str,
+    module_root: &std::path::Path,
+    current_module: &str,
+    cache: &mut ModuleEnumCache,
+    apply: F,
+) -> Result<(), syn::Error>
+where
+    F: FnOnce(&mut NestedExprRewriter<'_>),
+{
+    let enums_by_ident = enums_for_exact_module(cache, current_module);
+    let mut rewriter = NestedExprRewriter {
+        current_file,
+        module_root,
+        current_module,
+        enums_by_ident: &enums_by_ident,
+        cache,
+        error: None,
+    };
+    apply(&mut rewriter);
+    if let Some(err) = rewriter.error {
+        return Err(err);
+    }
+    Ok(())
+}
+
+fn rewrite_scope_item_with_context(
+    item: &mut Item,
+    current_file: &str,
+    module_root: &std::path::Path,
+    current_module: &str,
+    cache: &mut ModuleEnumCache,
+) -> Result<(), syn::Error> {
+    match item {
+        Item::Mod(item_mod) => {
+            rewrite_scope_inline_module(item_mod, current_file, module_root, current_module, cache)
+        }
+        _ => with_scope_rewriter(
+            current_file,
+            module_root,
+            current_module,
+            cache,
+            |rewriter| {
+                rewriter.visit_item_mut(item);
+            },
+        ),
+    }
+}
+
+fn rewrite_scope_inline_module(
+    item_mod: &mut ItemMod,
+    current_file: &str,
+    module_root: &std::path::Path,
+    parent_module: &str,
+    cache: &mut ModuleEnumCache,
+) -> Result<(), syn::Error> {
+    let child_module = child_module_path(parent_module, &item_mod.ident);
+    let Some((_, items)) = &mut item_mod.content else {
+        return Err(syn::Error::new(
+            item_mod.span(),
+            "#[nestum_scope] requires an inline module body; use it on `mod name { ... }`, not `mod name;`",
+        ));
+    };
+
+    for item in items {
+        rewrite_scope_item_with_context(item, current_file, module_root, &child_module, cache)?;
+    }
+
+    Ok(())
+}
+
+fn rewrite_scope_item_tokens(item: &mut Item) -> Result<proc_macro2::TokenStream, syn::Error> {
+    let (current_file, module_root, current_module) = current_module_context(item.span())?;
+    let mut cache = collect_module_cache(&current_file, &module_root)?;
+
+    match item {
+        Item::Fn(_) | Item::Impl(_) => {
+            rewrite_scope_item_with_context(
+                item,
+                &current_file,
+                &module_root,
+                &current_module,
+                &mut cache,
+            )?;
+        }
+        Item::Mod(item_mod) => {
+            rewrite_scope_inline_module(
+                item_mod,
+                &current_file,
+                &module_root,
+                &current_module,
+                &mut cache,
+            )?;
+        }
+        _ => {
+            return Err(syn::Error::new(
+                item.span(),
+                "#[nestum_scope] can only be applied to functions, impl blocks, or inline modules",
+            ));
+        }
+    }
+
+    Ok(quote! { #item })
+}
+
+fn rewrite_scope_impl_item_fn_tokens(
+    item_fn: &mut ImplItemFn,
+) -> Result<proc_macro2::TokenStream, syn::Error> {
+    let (current_file, module_root, current_module) = current_module_context(item_fn.span())?;
+    let mut cache = collect_module_cache(&current_file, &module_root)?;
+    with_scope_rewriter(
+        &current_file,
+        &module_root,
+        &current_module,
+        &mut cache,
+        |rewriter| {
+            rewriter.visit_impl_item_fn_mut(item_fn);
+        },
+    )?;
+    Ok(quote! { #item_fn })
+}
+
+fn rewrite_scope_trait_item_fn_tokens(
+    item_fn: &mut TraitItemFn,
+) -> Result<proc_macro2::TokenStream, syn::Error> {
+    let (current_file, module_root, current_module) = current_module_context(item_fn.span())?;
+    let mut cache = collect_module_cache(&current_file, &module_root)?;
+    with_scope_rewriter(
+        &current_file,
+        &module_root,
+        &current_module,
+        &mut cache,
+        |rewriter| {
+            rewriter.visit_trait_item_fn_mut(item_fn);
+        },
+    )?;
+    Ok(quote! { #item_fn })
+}
+
 fn try_expand_enum_from_source_file(
     item: ItemEnum,
     source_file: &str,
@@ -444,7 +663,7 @@ fn expand_enum_no_context(
     source_file: Option<&str>,
 ) -> Result<proc_macro2::TokenStream, syn::Error> {
     let mut enum_variants = Vec::new();
-    let mut root_variant_export_idents = Vec::new();
+    let mut root_variants = Vec::new();
     let mut nested_variant_module_idents = Vec::new();
     let mut nested_variant_modules = Vec::new();
     let source_file = source_file.map(|s| s.to_string());
@@ -457,7 +676,7 @@ fn expand_enum_no_context(
 
         if let Ok(inner_ty) = extract_single_tuple_type(variant) {
             let Some(inner_path) = extract_plain_enum_path(&inner_ty)? else {
-                root_variant_export_idents.push(variant.ident.clone());
+                root_variants.push(variant_clean.clone());
                 enum_variants.push(variant_clean);
                 continue;
             };
@@ -499,18 +718,18 @@ fn expand_enum_no_context(
         }
 
         if !is_marked_nested {
-            root_variant_export_idents.push(variant.ident.clone());
+            root_variants.push(variant_clean.clone());
         }
         enum_variants.push(variant_clean);
     }
 
-    Ok(emit_expanded_enum_module(
+    emit_expanded_enum_module(
         &item,
         enum_variants,
-        &root_variant_export_idents,
+        &root_variants,
         &nested_variant_module_idents,
         nested_variant_modules,
-    ))
+    )
 }
 
 static EXPANDED_ENUMS: OnceLock<Mutex<HashMap<String, HashSet<String>>>> = OnceLock::new();
@@ -767,13 +986,65 @@ fn build_nested_variant_module(
     }
 }
 
+fn build_root_variant_item(
+    outer_enum: &ItemEnum,
+    actual_enum_ident: &syn::Ident,
+    variant: &syn::Variant,
+) -> Result<Option<proc_macro2::TokenStream>, syn::Error> {
+    let variant_ident = &variant.ident;
+    let (_, ty_generics, _) = outer_enum.generics.split_for_impl();
+    let (fn_generics, outer_return_ty, where_clause, can_use_const) =
+        wrapper_signature_tokens_with_return_ty(outer_enum, quote! { self::Enum #ty_generics });
+    let variant_path = quote! { self::#actual_enum_ident::#variant_ident };
+
+    match &variant.fields {
+        Fields::Unit if can_use_const => Ok(Some(quote! {
+            #[allow(non_upper_case_globals)]
+            pub const #variant_ident: #outer_return_ty = #variant_path;
+        })),
+        Fields::Unit => Ok(Some(quote! {
+            pub fn #variant_ident #fn_generics () -> #outer_return_ty #where_clause {
+                #variant_path
+            }
+        })),
+        Fields::Unnamed(fields) => {
+            let args: Vec<_> = fields
+                .unnamed
+                .iter()
+                .enumerate()
+                .map(|(i, f)| {
+                    let ident = format_ident!("v{i}");
+                    let ty = &f.ty;
+                    quote! { #ident: #ty }
+                })
+                .collect();
+            let arg_idents: Vec<_> = fields
+                .unnamed
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    let ident = format_ident!("v{i}");
+                    quote! { #ident }
+                })
+                .collect();
+
+            Ok(Some(quote! {
+                pub fn #variant_ident #fn_generics (#(#args),*) -> #outer_return_ty #where_clause {
+                    #variant_path(#(#arg_idents),*)
+                }
+            }))
+        }
+        Fields::Named(_) => Ok(None),
+    }
+}
+
 fn emit_expanded_enum_module(
     item: &ItemEnum,
     enum_variants: Vec<syn::Variant>,
-    root_variant_export_idents: &[syn::Ident],
+    root_variants: &[syn::Variant],
     _nested_variant_module_idents: &[syn::Ident],
     nested_variant_modules: Vec<proc_macro2::TokenStream>,
-) -> proc_macro2::TokenStream {
+) -> Result<proc_macro2::TokenStream, syn::Error> {
     let vis = &item.vis;
     let enum_mod_ident = &item.ident;
     let actual_enum_ident = format_ident!("__Nestum{}", enum_mod_ident);
@@ -782,15 +1053,23 @@ fn emit_expanded_enum_module(
     let alias_generics = &item.generics;
     let (_, ty_generics, _) = item.generics.split_for_impl();
     let enum_alias_ident = generated_enum_alias_ident();
-    let root_variant_exports = if root_variant_export_idents.is_empty() {
+    let mut root_variant_items = Vec::new();
+    let mut root_variant_reexport_idents = Vec::new();
+    for variant in root_variants {
+        match build_root_variant_item(item, &actual_enum_ident, variant)? {
+            Some(item_tokens) => root_variant_items.push(item_tokens),
+            None => root_variant_reexport_idents.push(variant.ident.clone()),
+        }
+    }
+    let root_variant_exports = if root_variant_reexport_idents.is_empty() {
         quote! {}
     } else {
         quote! {
-            pub use self::#actual_enum_ident::{#(#root_variant_export_idents),*};
+            pub use self::#actual_enum_ident::{#(#root_variant_reexport_idents),*};
         }
     };
 
-    quote! {
+    Ok(quote! {
         #[allow(non_snake_case)]
         #vis mod #enum_mod_ident {
             #[allow(unused_imports)]
@@ -800,9 +1079,10 @@ fn emit_expanded_enum_module(
             #[allow(type_alias_bounds)]
             #vis type #enum_alias_ident #alias_generics = self::#actual_enum_ident #ty_generics;
             #root_variant_exports
+            #(#root_variant_items)*
             #(#nested_variant_modules)*
         }
-    }
+    })
 }
 
 fn expand_enum_with_context(
@@ -815,7 +1095,7 @@ fn expand_enum_with_context(
     cache: &mut ModuleEnumCache,
 ) -> Result<proc_macro2::TokenStream, syn::Error> {
     let mut enum_variants = Vec::new();
-    let mut root_variant_export_idents = Vec::new();
+    let mut root_variants = Vec::new();
     let mut nested_variant_module_idents = Vec::new();
     let mut nested_variant_modules = Vec::new();
 
@@ -866,18 +1146,18 @@ fn expand_enum_with_context(
         }
 
         if !is_marked_nested {
-            root_variant_export_idents.push(variant.ident.clone());
+            root_variants.push(variant_clean.clone());
         }
         enum_variants.push(variant_clean);
     }
 
-    Ok(emit_expanded_enum_module(
+    emit_expanded_enum_module(
         &item,
         enum_variants,
-        &root_variant_export_idents,
+        &root_variants,
         &nested_variant_module_idents,
         nested_variant_modules,
-    ))
+    )
 }
 
 fn build_wrappers(
@@ -889,8 +1169,12 @@ fn build_wrappers(
     module_root: &std::path::Path,
     cache: &mut ModuleEnumCache,
 ) -> Result<Vec<proc_macro2::TokenStream>, syn::Error> {
-    let outer_base_path =
-        enum_type_path_from_module(outer_module_path, &outer_enum.ident, &syn::PathArguments::None, false);
+    let outer_base_path = enum_type_path_from_module(
+        outer_module_path,
+        &outer_enum.ident,
+        &syn::PathArguments::None,
+        false,
+    );
     let outer_return_ty = outer_return_ty_tokens(outer_enum, &outer_base_path);
     let outer_variant_path =
         enum_variant_path_from_base(&outer_base_path, &outer_enum.ident, true, outer_variant);
@@ -934,7 +1218,10 @@ fn build_recursive_wrapper_items(
         )?;
 
         let mut wrapper_variant = inner_variant.clone();
-        if let Some(nested_enum) = nested_enum.as_ref().filter(|nested_enum| nested_enum.marked) {
+        if let Some(nested_enum) = nested_enum
+            .as_ref()
+            .filter(|nested_enum| nested_enum.marked)
+        {
             rewrite_variant_type_for_nested(
                 &mut wrapper_variant,
                 nested_enum.enum_type_path.clone(),
@@ -964,7 +1251,10 @@ fn build_recursive_wrapper_items(
             module_root,
             cache,
         )?;
-        items.push(build_nested_variant_module(&inner_variant.ident, &nested_items));
+        items.push(build_nested_variant_module(
+            &inner_variant.ident,
+            &nested_items,
+        ));
     }
 
     Ok(items)
@@ -1082,6 +1372,7 @@ fn build_wrapper_from_syn_variant_with_chain(
         Fields::Unit if can_use_const => {
             let expr = apply_constructor_chain(constructor_chain, quote! { #inner_variant_path });
             quote! {
+                #[allow(non_upper_case_globals)]
                 pub const #inner_ident: #outer_return_ty = #expr;
             }
         }
@@ -1128,7 +1419,10 @@ fn build_wrapper_from_syn_variant_with_chain(
                 .named
                 .iter()
                 .map(|f| {
-                    let ident = f.ident.as_ref().expect("named field should have an identifier");
+                    let ident = f
+                        .ident
+                        .as_ref()
+                        .expect("named field should have an identifier");
                     let ty = &f.ty;
                     quote! { #ident: #ty }
                 })
@@ -1137,7 +1431,10 @@ fn build_wrapper_from_syn_variant_with_chain(
                 .named
                 .iter()
                 .map(|f| {
-                    let ident = f.ident.as_ref().expect("named field should have an identifier");
+                    let ident = f
+                        .ident
+                        .as_ref()
+                        .expect("named field should have an identifier");
                     quote! { #ident }
                 })
                 .collect();
@@ -1166,6 +1463,7 @@ fn build_wrapper_from_shape_variant(
 
     match fields {
         VariantShapeFields::Unit if can_use_const => Ok(quote! {
+            #[allow(non_upper_case_globals)]
             pub const #inner_ident: #outer_return_ty =
                 super::Enum::#outer_variant(#inner_variant_path);
         }),
@@ -1212,7 +1510,9 @@ fn build_wrapper_from_shape_variant(
                     let ident = syn::parse_str::<syn::Ident>(name).map_err(|err| {
                         syn::Error::new(
                             proc_macro2::Span::call_site(),
-                            format!("failed to parse nested named field identifier `{name}`: {err}"),
+                            format!(
+                                "failed to parse nested named field identifier `{name}`: {err}"
+                            ),
                         )
                     })?;
                     let ty = syn::parse_str::<syn::Type>(ty_str).map_err(|err| {
@@ -1231,7 +1531,9 @@ fn build_wrapper_from_shape_variant(
                     let ident = syn::parse_str::<syn::Ident>(name).map_err(|err| {
                         syn::Error::new(
                             proc_macro2::Span::call_site(),
-                            format!("failed to parse nested named field identifier `{name}`: {err}"),
+                            format!(
+                                "failed to parse nested named field identifier `{name}`: {err}"
+                            ),
                         )
                     })?;
                     Ok(quote! { #ident })
@@ -1322,12 +1624,32 @@ fn generated_enum_alias_ident() -> syn::Ident {
     format_ident!("Enum")
 }
 
+fn plain_path_prefix_segments(inner_path: &PlainEnumPath) -> Vec<syn::PathSegment> {
+    match inner_path.path_base {
+        ModulePathBase::Current => Vec::new(),
+        ModulePathBase::Crate => vec![path_segment(
+            &syn::Ident::new("crate", proc_macro2::Span::call_site()),
+            syn::PathArguments::None,
+        )],
+        ModulePathBase::Super(depth) => (0..depth)
+            .map(|_| {
+                path_segment(
+                    &syn::Ident::new("super", proc_macro2::Span::call_site()),
+                    syn::PathArguments::None,
+                )
+            })
+            .collect(),
+    }
+}
+
 fn base_path_from_plain_enum_path(inner_path: &PlainEnumPath) -> syn::Path {
-    let mut segments = inner_path
-        .module_path
-        .iter()
-        .map(|ident| path_segment(ident, syn::PathArguments::None))
-        .collect::<Vec<_>>();
+    let mut segments = plain_path_prefix_segments(inner_path);
+    segments.extend(
+        inner_path
+            .module_path
+            .iter()
+            .map(|ident| path_segment(ident, syn::PathArguments::None)),
+    );
     segments.push(path_segment(
         &inner_path.enum_ident,
         syn::PathArguments::None,
@@ -1356,11 +1678,13 @@ fn append_enum_type_segments(
 }
 
 fn enum_type_path_from_plain_path(inner_path: &PlainEnumPath, marked: bool) -> syn::Path {
-    let mut segments = inner_path
-        .module_path
-        .iter()
-        .map(|ident| path_segment(ident, syn::PathArguments::None))
-        .collect::<Vec<_>>();
+    let mut segments = plain_path_prefix_segments(inner_path);
+    segments.extend(
+        inner_path
+            .module_path
+            .iter()
+            .map(|ident| path_segment(ident, syn::PathArguments::None)),
+    );
     append_enum_type_segments(
         &mut segments,
         &inner_path.enum_ident,
@@ -1410,7 +1734,10 @@ fn enum_variant_path_from_base(
     }
 }
 
-fn outer_return_ty_tokens(outer_enum: &ItemEnum, outer_base_path: &syn::Path) -> proc_macro2::TokenStream {
+fn outer_return_ty_tokens(
+    outer_enum: &ItemEnum,
+    outer_base_path: &syn::Path,
+) -> proc_macro2::TokenStream {
     let (_, ty_generics, _) = outer_enum.generics.split_for_impl();
     quote! { #outer_base_path::Enum #ty_generics }
 }
@@ -1494,12 +1821,14 @@ use the enum ident as the field type",
 
         let module_path_str = resolve_module_path_string(
             &external_parts.module_path,
-            external_parts.explicit_crate,
+            external_parts.path_base,
             owner_module_path,
+            external_path.span(),
         );
+        let module_path_str = module_path_str?;
         let Some((item, marked)) = resolve_enum_from_path(
             &external_parts.module_path,
-            external_parts.explicit_crate,
+            external_parts.path_base,
             &external_parts.enum_ident,
             &mut resolve_ctx,
         )?
@@ -1543,12 +1872,14 @@ ensure the module path exists and the enum is declared in that module",
 
     let module_path_str = resolve_module_path_string(
         &inner_path.module_path,
-        inner_path.explicit_crate,
+        inner_path.path_base,
         owner_module_path,
+        inner_ty.span(),
     );
+    let module_path_str = module_path_str?;
     let Some((item, marked)) = resolve_enum_from_path(
         &inner_path.module_path,
-        inner_path.explicit_crate,
+        inner_path.path_base,
         &inner_path.enum_ident,
         &mut resolve_ctx,
     )?
@@ -1869,7 +2200,10 @@ fn rewrite_pat_struct(
         cache,
     )?
     else {
-        return Ok(Pat::Struct(PatStruct { fields, ..pat_struct }));
+        return Ok(Pat::Struct(PatStruct {
+            fields,
+            ..pat_struct
+        }));
     };
 
     let leaf_step = resolved_path
@@ -1895,12 +2229,17 @@ fn rewrite_pat_struct(
 
 fn resolve_enum_info_from_path(
     module_path: &[syn::Ident],
-    explicit_crate: bool,
+    path_base: ModulePathBase,
     enum_ident: &syn::Ident,
     ctx: &PathResolveCtx<'_>,
     cache: &mut ModuleEnumCache,
 ) -> Result<Option<ResolvedEnumInfo>, syn::Error> {
-    let module_path_str = resolve_module_path_string(module_path, explicit_crate, ctx.current_module);
+    let module_path_str = resolve_module_path_string(
+        module_path,
+        path_base,
+        ctx.current_module,
+        enum_ident.span(),
+    )?;
     let mut resolve_ctx = ResolveCtx {
         current_file: ctx.current_file,
         module_root: ctx.module_root,
@@ -1909,7 +2248,7 @@ fn resolve_enum_info_from_path(
         cache,
     };
     let Some((item, marked)) =
-        resolve_enum_from_path(module_path, explicit_crate, enum_ident, &mut resolve_ctx)?
+        resolve_enum_from_path(module_path, path_base, enum_ident, &mut resolve_ctx)?
     else {
         return Ok(None);
     };
@@ -1961,22 +2300,14 @@ fn resolve_nested_match_path(
     };
 
     for outer_idx in (0..segments.len() - 1).rev() {
-        let module_path = segments[..outer_idx].to_vec();
-        let explicit_crate = module_path
-            .first()
-            .map(|ident| ident == "crate")
-            .unwrap_or(false);
+        let raw_module_path = segments[..outer_idx].to_vec();
+        let (path_base, module_path) = split_module_path_base(&raw_module_path);
         let outer_enum = &segments[outer_idx];
         let variant_chain = &segments[outer_idx + 1..];
 
-        let Some(mut current_enum) = resolve_enum_info_from_path(
-            &module_path,
-            explicit_crate,
-            outer_enum,
-            &path_ctx,
-            cache,
-        )
-        .unwrap_or_default()
+        let Some(mut current_enum) =
+            resolve_enum_info_from_path(&module_path, path_base, outer_enum, &path_ctx, cache)
+                .unwrap_or_default()
         else {
             continue;
         };
@@ -2005,7 +2336,10 @@ fn resolve_nested_match_path(
             else {
                 return Err(syn::Error::new(
                     path.span(),
-                    format!("variant {} not found on enum {}", variant_ident, current_enum.item.ident),
+                    format!(
+                        "variant {} not found on enum {}",
+                        variant_ident, current_enum.item.ident
+                    ),
                 ));
             };
 
@@ -2282,6 +2616,7 @@ impl VisitMut for NestedExprRewriter<'_> {
                     Err(err) => self.set_error(err),
                 }
             }
+            Expr::Macro(expr_macro) => self.visit_expr_macro_mut(expr_macro),
             _ => visit_mut::visit_expr_mut(self, expr),
         }
     }
@@ -2332,61 +2667,151 @@ impl VisitMut for NestedExprRewriter<'_> {
         }
     }
 
+    fn visit_stmt_mut(&mut self, stmt: &mut Stmt) {
+        if self.error.is_some() {
+            return;
+        }
+
+        match stmt {
+            Stmt::Macro(stmt_macro) => {
+                let mut expr_macro = ExprMacro {
+                    attrs: stmt_macro.attrs.clone(),
+                    mac: stmt_macro.mac.clone(),
+                };
+                self.visit_expr_macro_mut(&mut expr_macro);
+                if self.error.is_some() {
+                    return;
+                }
+                stmt_macro.mac = expr_macro.mac;
+            }
+            _ => visit_mut::visit_stmt_mut(self, stmt),
+        }
+    }
+
     fn visit_expr_macro_mut(&mut self, expr_macro: &mut ExprMacro) {
         if self.error.is_some() {
             return;
         }
 
-        if !is_matches_macro_path(&expr_macro.mac.path) {
-            visit_mut::visit_expr_macro_mut(self, expr_macro);
-            return;
-        }
-
-        let mut input = match syn::parse2::<MatchesMacroInput>(expr_macro.mac.tokens.clone()) {
-            Ok(input) => input,
-            Err(err) => {
-                self.set_error(syn::Error::new(
-                    expr_macro.mac.span(),
-                    format!(
-                        "unsupported matches! syntax inside nested!: {err}; \
+        if is_matches_macro_path(&expr_macro.mac.path) {
+            let mut input = match syn::parse2::<MatchesMacroInput>(expr_macro.mac.tokens.clone()) {
+                Ok(input) => input,
+                Err(err) => {
+                    self.set_error(syn::Error::new(
+                        expr_macro.mac.span(),
+                        format!(
+                            "unsupported matches! syntax inside nested! or #[nestum_scope]: {err}; \
 use matches!(expr, PATTERN) or matches!(expr, PATTERN if guard)"
-                    ),
-                ));
-                return;
-            }
-        };
+                        ),
+                    ));
+                    return;
+                }
+            };
 
-        self.visit_expr_mut(&mut input.expr);
-        if self.error.is_some() {
-            return;
-        }
-
-        match rewrite_pat(
-            input.pat.clone(),
-            self.current_file,
-            self.module_root,
-            self.current_module,
-            self.enums_by_ident,
-            self.cache,
-        ) {
-            Ok(pat) => input.pat = pat,
-            Err(err) => {
-                self.set_error(err);
-                return;
-            }
-        }
-
-        if let Some((_, guard)) = &mut input.guard {
-            self.visit_expr_mut(guard);
+            self.visit_expr_mut(&mut input.expr);
             if self.error.is_some() {
                 return;
             }
+
+            match rewrite_pat(
+                input.pat.clone(),
+                self.current_file,
+                self.module_root,
+                self.current_module,
+                self.enums_by_ident,
+                self.cache,
+            ) {
+                Ok(pat) => input.pat = pat,
+                Err(err) => {
+                    self.set_error(err);
+                    return;
+                }
+            }
+
+            if let Some((_, guard)) = &mut input.guard {
+                self.visit_expr_mut(guard);
+                if self.error.is_some() {
+                    return;
+                }
+            }
+
+            let expr = &input.expr;
+            let pat = &input.pat;
+            let guard = input
+                .guard
+                .as_ref()
+                .map(|(if_token, guard)| quote!(#if_token #guard));
+            expr_macro.mac.tokens = quote!(#expr, #pat #guard).into();
+            return;
         }
 
-        let expr = &input.expr;
-        let pat = &input.pat;
-        let guard = input.guard.as_ref().map(|(if_token, guard)| quote!(#if_token #guard));
-        expr_macro.mac.tokens = quote!(#expr, #pat #guard).into();
+        if is_assert_macro_path(&expr_macro.mac.path) {
+            let mut input = match syn::parse2::<AssertMacroInput>(expr_macro.mac.tokens.clone()) {
+                Ok(input) => input,
+                Err(err) => {
+                    self.set_error(syn::Error::new(
+                        expr_macro.mac.span(),
+                        format!(
+                            "unsupported assert! syntax inside nested! or #[nestum_scope]: {err}; \
+use assert!(expr) or assert!(expr, ...)"
+                        ),
+                    ));
+                    return;
+                }
+            };
+
+            self.visit_expr_mut(&mut input.expr);
+            if self.error.is_some() {
+                return;
+            }
+
+            let expr = &input.expr;
+            let trailing = input
+                .trailing
+                .as_ref()
+                .map(|(comma, rest)| quote!(#comma #rest));
+            expr_macro.mac.tokens = quote!(#expr #trailing).into();
+            return;
+        }
+
+        if is_binary_assert_macro_path(&expr_macro.mac.path) {
+            let mut input = match syn::parse2::<BinaryAssertMacroInput>(
+                expr_macro.mac.tokens.clone(),
+            ) {
+                Ok(input) => input,
+                Err(err) => {
+                    self.set_error(syn::Error::new(
+                            expr_macro.mac.span(),
+                            format!(
+                                "unsupported assert_eq!/assert_ne! syntax inside nested! or #[nestum_scope]: {err}; \
+use assert_eq!(left, right) or assert_eq!(left, right, ...)"
+                            ),
+                        ));
+                    return;
+                }
+            };
+
+            self.visit_expr_mut(&mut input.left);
+            if self.error.is_some() {
+                return;
+            }
+
+            self.visit_expr_mut(&mut input.right);
+            if self.error.is_some() {
+                return;
+            }
+
+            let left = &input.left;
+            let right = &input.right;
+            let trailing = input
+                .trailing
+                .as_ref()
+                .map(|(comma, rest)| quote!(#comma #rest));
+            expr_macro.mac.tokens = quote!(#left, #right #trailing).into();
+            return;
+        }
+
+        visit_mut::visit_expr_macro_mut(self, expr_macro);
     }
 }
 
@@ -2445,59 +2870,183 @@ impl Parse for MatchesMacroInput {
         } else {
             None
         };
+        Ok(Self { expr, pat, guard })
+    }
+}
+
+struct AssertMacroInput {
+    expr: Expr,
+    trailing: Option<(Token![,], proc_macro2::TokenStream)>,
+}
+
+impl Parse for AssertMacroInput {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let expr: Expr = input.parse()?;
+        let trailing = if input.is_empty() {
+            None
+        } else {
+            Some((input.parse()?, input.parse()?))
+        };
+        Ok(Self { expr, trailing })
+    }
+}
+
+struct BinaryAssertMacroInput {
+    left: Expr,
+    right: Expr,
+    trailing: Option<(Token![,], proc_macro2::TokenStream)>,
+}
+
+impl Parse for BinaryAssertMacroInput {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let left: Expr = input.parse()?;
+        let _comma: Token![,] = input.parse()?;
+        let right: Expr = input.parse()?;
+        let trailing = if input.is_empty() {
+            None
+        } else {
+            Some((input.parse()?, input.parse()?))
+        };
         Ok(Self {
-            expr,
-            pat,
-            guard,
+            left,
+            right,
+            trailing,
         })
     }
 }
 
+fn macro_tail_is(path: &syn::Path, expected: &[&str]) -> bool {
+    path.segments
+        .last()
+        .map(|segment| expected.iter().any(|name| segment.ident == *name))
+        .unwrap_or(false)
+}
+
 fn is_matches_macro_path(path: &syn::Path) -> bool {
-    path.is_ident("matches")
-        || path
-            .segments
-            .last()
-            .map(|segment| segment.ident == "matches")
-            .unwrap_or(false)
+    path.is_ident("matches") || macro_tail_is(path, &["matches"])
+}
+
+fn is_assert_macro_path(path: &syn::Path) -> bool {
+    path.is_ident("assert") || macro_tail_is(path, &["assert", "debug_assert"])
+}
+
+fn is_binary_assert_macro_path(path: &syn::Path) -> bool {
+    macro_tail_is(
+        path,
+        &[
+            "assert_eq",
+            "assert_ne",
+            "debug_assert_eq",
+            "debug_assert_ne",
+        ],
+    )
 }
 
 fn resolve_module_path_string(
     module_path: &[syn::Ident],
-    explicit_crate: bool,
+    path_base: ModulePathBase,
     current_module: &str,
-) -> String {
+    span: proc_macro2::Span,
+) -> Result<String, syn::Error> {
+    let base = match path_base {
+        ModulePathBase::Current => current_module.to_string(),
+        ModulePathBase::Crate => "crate".to_string(),
+        ModulePathBase::Super(depth) => ancestor_module_path(current_module, depth, span)?,
+    };
+
     if module_path.is_empty() {
-        current_module.to_string()
-    } else {
-        let mut segments = module_path
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-        let is_crate = segments.first().map(|s| s.as_str()) == Some("crate");
-        if is_crate {
-            segments.remove(0);
-        }
-        let base = if segments.is_empty() {
-            "crate".to_string()
-        } else {
-            segments.join("::")
-        };
-        if is_crate || current_module == "crate" || explicit_crate {
-            base
-        } else {
-            format!("{current_module}::{base}")
-        }
+        return Ok(base);
     }
+
+    let nested = module_path
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>()
+        .join("::");
+    if base == "crate" {
+        Ok(nested)
+    } else {
+        Ok(format!("{base}::{nested}"))
+    }
+}
+
+fn ancestor_module_path(
+    current_module: &str,
+    depth: usize,
+    span: proc_macro2::Span,
+) -> Result<String, syn::Error> {
+    if depth == 0 {
+        return Ok(current_module.to_string());
+    }
+
+    if current_module == "crate" {
+        return Err(syn::Error::new(
+            span,
+            "super:: path escapes the crate root in this module",
+        ));
+    }
+
+    let mut segments = current_module
+        .split("::")
+        .filter(|segment| !segment.is_empty() && *segment != "crate")
+        .collect::<Vec<_>>();
+    if depth > segments.len() {
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "super:: path climbs {depth} module levels, but the current module is only {} level(s) deep",
+                segments.len()
+            ),
+        ));
+    }
+
+    segments.truncate(segments.len() - depth);
+    if segments.is_empty() {
+        Ok("crate".to_string())
+    } else {
+        Ok(segments.join("::"))
+    }
+}
+
+fn split_module_path_base(raw_module_path: &[syn::Ident]) -> (ModulePathBase, Vec<syn::Ident>) {
+    if raw_module_path.is_empty() {
+        return (ModulePathBase::Current, Vec::new());
+    }
+
+    if raw_module_path[0] == "crate" {
+        return (ModulePathBase::Crate, raw_module_path[1..].to_vec());
+    }
+
+    if raw_module_path[0] == "self" {
+        return (ModulePathBase::Current, raw_module_path[1..].to_vec());
+    }
+
+    let mut super_depth = 0usize;
+    while super_depth < raw_module_path.len() && raw_module_path[super_depth] == "super" {
+        super_depth += 1;
+    }
+    if super_depth > 0 {
+        return (
+            ModulePathBase::Super(super_depth),
+            raw_module_path[super_depth..].to_vec(),
+        );
+    }
+
+    (ModulePathBase::Current, raw_module_path.to_vec())
 }
 
 fn resolve_enum_from_path(
     module_path: &[syn::Ident],
-    explicit_crate: bool,
+    path_base: ModulePathBase,
     enum_ident: &syn::Ident,
     ctx: &mut ResolveCtx<'_>,
 ) -> Result<Option<(ItemEnum, bool)>, syn::Error> {
-    let module_path_str = resolve_module_path_string(module_path, explicit_crate, ctx.current_module);
+    let module_path_str = resolve_module_path_string(
+        module_path,
+        path_base,
+        ctx.current_module,
+        enum_ident.span(),
+    )?;
 
     if module_path_str == ctx.current_module {
         let item = ctx.enums_by_ident.get(&enum_ident.to_string()).cloned();
@@ -2515,7 +3064,7 @@ fn resolve_enum_from_path(
         ctx.module_root,
         ctx.cache,
     ) {
-        if explicit_crate {
+        if matches!(path_base, ModulePathBase::Crate | ModulePathBase::Super(_)) {
             return Err(err);
         }
         return Ok(None);
@@ -2664,7 +3213,10 @@ fn extract_simple_ident(ty: &syn::Type) -> Result<syn::Ident, syn::Error> {
         syn::Type::Path(type_path)
             if type_path.qself.is_none()
                 && type_path.path.segments.len() == 1
-                && matches!(type_path.path.segments[0].arguments, syn::PathArguments::None) =>
+                && matches!(
+                    type_path.path.segments[0].arguments,
+                    syn::PathArguments::None
+                ) =>
         {
             Ok(type_path.path.segments[0].ident.clone())
         }
@@ -2690,20 +3242,6 @@ fn extract_plain_enum_path(ty: &syn::Type) -> Result<Option<PlainEnumPath>, syn:
                 return Ok(None);
             }
 
-            let first = &type_path.path.segments[0].ident;
-            if first == "self" {
-                return Err(syn::Error::new(
-                    ty.span(),
-                    "nested enum type cannot use self:: paths; use the bare enum name in the same module",
-                ));
-            }
-            if first == "super" {
-                return Err(syn::Error::new(
-                    ty.span(),
-                    "nested enum type cannot use super:: paths; use crate::path::Enum or #[nestum(external = \"crate::path::Enum\")]",
-                ));
-            }
-
             if type_path.path.segments.len() > 1
                 && type_path
                     .path
@@ -2718,7 +3256,11 @@ fn extract_plain_enum_path(ty: &syn::Type) -> Result<Option<PlainEnumPath>, syn:
                 ));
             }
 
-            let last = type_path.path.segments.last().expect("path should not be empty");
+            let last = type_path
+                .path
+                .segments
+                .last()
+                .expect("path should not be empty");
             if matches!(last.arguments, syn::PathArguments::Parenthesized(_)) {
                 return Err(syn::Error::new(
                     ty.span(),
@@ -2727,21 +3269,18 @@ fn extract_plain_enum_path(ty: &syn::Type) -> Result<Option<PlainEnumPath>, syn:
             }
 
             let enum_ident = last.ident.clone();
-            let module_path = type_path
+            let raw_module_path = type_path
                 .path
                 .segments
                 .iter()
                 .take(type_path.path.segments.len() - 1)
                 .map(|segment| segment.ident.clone())
                 .collect::<Vec<_>>();
-            let explicit_crate = module_path
-                .first()
-                .map(|ident| ident == "crate")
-                .unwrap_or(false);
+            let (path_base, module_path) = split_module_path_base(&raw_module_path);
 
             Ok(Some(PlainEnumPath {
+                path_base,
                 module_path,
-                explicit_crate,
                 enum_ident,
                 enum_arguments: last.arguments.clone(),
             }))
@@ -2844,7 +3383,11 @@ fn raw_string_prefix_len(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
     Some((hashes, idx - start + 1))
 }
 
-fn find_module_path_by_text_scan(file_path: &str, line_number: usize, base: &str) -> Option<String> {
+fn find_module_path_by_text_scan(
+    file_path: &str,
+    line_number: usize,
+    base: &str,
+) -> Option<String> {
     #[derive(Clone, Copy)]
     enum Mode {
         Normal,
@@ -3279,13 +3822,15 @@ mod tests {
                 #[allow(type_alias_bounds)]
                 pub type Enum = self::__NestumOuter;
 
-                pub use self::__NestumOuter::Other;
+                #[allow(non_upper_case_globals)]
+                pub const Other: self::Enum = self::__NestumOuter::Other;
 
                 #[allow(non_snake_case)]
                 pub mod Wrap {
                     #[allow(unused_imports)]
                     use super::*;
 
+                    #[allow(non_upper_case_globals)]
                     pub const A: super::Enum = super::Enum::Wrap(super::super::Inner::Enum::A);
 
                     pub fn B(v0: u8) -> super::Enum {
@@ -3297,6 +3842,42 @@ mod tests {
         let pretty_expected = prettyplease::unparse(&expected);
 
         assert_eq!(pretty_expanded, pretty_expected);
+    }
+
+    #[test]
+    fn public_surface_keeps_nested_root_api_small() {
+        let inner: ItemEnum = syn::parse_quote! {
+            #[nestum]
+            pub enum DocumentEvent {
+                Created,
+            }
+        };
+
+        register_enum_shape(None, &inner).expect("shape registration should succeed");
+
+        let outer: ItemEnum = syn::parse_quote! {
+            #[nestum]
+            pub enum Event {
+                Document(DocumentEvent),
+                Health,
+            }
+        };
+
+        let expanded =
+            expand_enum_no_context(outer, None, None).expect("no-context expansion should succeed");
+        let pretty_expanded = pretty(expanded);
+
+        assert!(pretty_expanded.contains("#[doc(hidden)]"));
+        assert!(pretty_expanded.contains("pub enum __NestumEvent {"));
+        assert!(pretty_expanded.contains("pub type Enum = self::__NestumEvent;"));
+        assert!(pretty_expanded.contains("#[allow(non_upper_case_globals)]"));
+        assert!(
+            pretty_expanded.contains("pub const Health: self::Enum = self::__NestumEvent::Health;")
+        );
+        assert!(pretty_expanded.contains("pub mod Document"));
+        assert!(!pretty_expanded.contains("pub use self::__NestumEvent::Document;"));
+        assert!(!pretty_expanded.contains("pub type Type ="));
+        assert!(!pretty_expanded.contains("pub type Event ="));
     }
 
     #[test]
@@ -3371,9 +3952,7 @@ pub enum ThemeFromFile {
 
         assert!(pretty_expanded.contains("pub mod ThemeFromFile"));
         assert!(pretty_expanded.contains("pub mod Pink"));
-        assert!(
-            pretty_expanded.contains("pub fn Main(v0: Color) -> crate::ThemeFromFile::Enum")
-        );
+        assert!(pretty_expanded.contains("pub fn Main(v0: Color) -> crate::ThemeFromFile::Enum"));
         assert!(pretty_expanded.contains("crate::VariantFromFile::Enum"));
 
         let _ = std::fs::remove_file(&path);

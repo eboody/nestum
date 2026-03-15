@@ -21,6 +21,8 @@ pub enum AbsoluteOuter {
 }
 
 fn main() {
+    let _ = inner_mod::Inner::A;
+    let _ = inner_mod::Inner::B(0);
     let relative = RelativeOuter::Wrap::B(1);
     let absolute = AbsoluteOuter::Wrap::A;
 

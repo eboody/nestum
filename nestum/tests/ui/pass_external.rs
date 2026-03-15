@@ -21,6 +21,8 @@ mod outer_mod {
 }
 
 fn main() {
+    let _ = outer_mod::inner_mod::Inner::A;
+    let _ = outer_mod::inner_mod::Inner::B(2);
     let _ = outer_mod::Outer::Wrap::A;
     let _ = outer_mod::Outer::Wrap::B(1);
 }

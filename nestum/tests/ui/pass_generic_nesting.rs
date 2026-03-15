@@ -15,7 +15,7 @@ pub enum Outer<T> {
 fn main() {
     let ready: Outer::Enum<u32> = Outer::Wrap::Ready();
     let value: Outer::Enum<u32> = Outer::Wrap::Value(1);
-    let other: Outer::Enum<u32> = Outer::Other;
+    let other: Outer::Enum<u32> = Outer::Other();
 
     nested! {
         match ready {

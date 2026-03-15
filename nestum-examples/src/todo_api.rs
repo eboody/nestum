@@ -148,7 +148,10 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-pub async fn execute(state: &AppState, command: AppCommand::Enum) -> Result<ApiReply, AppError::Enum> {
+pub async fn execute(
+    state: &AppState,
+    command: AppCommand::Enum,
+) -> Result<ApiReply, AppError::Enum> {
     nested! {
         match command {
             AppCommand::Health::Check => {
@@ -276,8 +279,7 @@ async fn fetch_todo(pool: &SqlitePool, id: i64) -> Result<Todo, AppError::Enum> 
         .fetch_optional(pool)
         .await?;
 
-    row.map(todo_from_row)
-        .ok_or(AppError::Todos::NotFound(id))
+    row.map(todo_from_row).ok_or(AppError::Todos::NotFound(id))
 }
 
 fn todo_from_row(row: sqlx::sqlite::SqliteRow) -> Todo {
@@ -326,7 +328,9 @@ async fn complete_todo(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<ApiReply>, AppError::Enum> {
-    Ok(Json(execute(&state, AppCommand::Todos::Complete(id)).await?))
+    Ok(Json(
+        execute(&state, AppCommand::Todos::Complete(id)).await?,
+    ))
 }
 
 #[cfg(test)]
@@ -368,7 +372,12 @@ mod tests {
 
         let list = app
             .clone()
-            .oneshot(Request::builder().uri("/todos").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/todos")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(list.status(), StatusCode::OK);
@@ -432,7 +441,12 @@ mod tests {
         let app = router(state);
 
         let health = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(health.status(), StatusCode::OK);

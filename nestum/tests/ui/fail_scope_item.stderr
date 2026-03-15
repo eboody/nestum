@@ -1,0 +1,5 @@
+error: #[nestum_scope] can only be applied to functions, impl blocks, or inline modules
+ --> tests/ui/fail_scope_item.rs:4:1
+  |
+4 | struct Nope;
+  | ^^^^^^

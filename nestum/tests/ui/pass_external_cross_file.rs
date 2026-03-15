@@ -9,5 +9,6 @@ pub enum Outer {
 }
 
 fn main() {
+    let _ = external_inner::Inner::A;
     let _ = Outer::Wrap::A;
 }
