@@ -1,8 +1,8 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
+    http,
+    response::IntoResponse,
     routing::{get, patch, post},
 };
 use nestum::{nested, nestum};
@@ -234,25 +234,25 @@ impl From<sqlx::Error> for AppError::Enum {
 }
 
 impl IntoResponse for AppError::Enum {
-    fn into_response(self) -> Response {
+    fn into_response(self) -> axum::response::Response {
         let (status, body) = nested! {
             match self {
                 AppError::Validation::EmptyTitle => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
+                    http::StatusCode::UNPROCESSABLE_ENTITY,
                     ErrorBody {
                         error: "validation",
                         detail: "title must not be blank".to_string(),
                     },
                 ),
                 AppError::Todos::NotFound(id) => (
-                    StatusCode::NOT_FOUND,
+                    http::StatusCode::NOT_FOUND,
                     ErrorBody {
                         error: "todo_not_found",
                         detail: format!("todo {id} does not exist"),
                     },
                 ),
                 AppError::Todos::Database(message) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    http::StatusCode::INTERNAL_SERVER_ERROR,
                     ErrorBody {
                         error: "database",
                         detail: message,
@@ -301,13 +301,13 @@ async fn list_todos(State(state): State<AppState>) -> Result<Json<ApiReply>, App
 async fn create_todo(
     State(state): State<AppState>,
     Json(payload): Json<CreateTodoRequest>,
-) -> Result<(StatusCode, Json<ApiReply>), AppError::Enum> {
+) -> Result<(http::StatusCode, Json<ApiReply>), AppError::Enum> {
     let command = nested! {
         AppCommand::Todos::Create {
             title: payload.title,
         }
     };
-    Ok((StatusCode::CREATED, Json(execute(&state, command).await?)))
+    Ok((http::StatusCode::CREATED, Json(execute(&state, command).await?)))
 }
 
 async fn rename_todo(
@@ -336,12 +336,12 @@ async fn complete_todo(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::Request};
+    use axum::{body::Body, http};
     use http_body_util::BodyExt;
     use serde_json::Value;
     use tower::ServiceExt;
 
-    async fn json_body(response: Response) -> Value {
+    async fn json_body(response: axum::response::Response) -> Value {
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         serde_json::from_slice(&bytes).unwrap()
     }
@@ -354,7 +354,7 @@ mod tests {
         let create = app
             .clone()
             .oneshot(
-                Request::builder()
+                http::Request::builder()
                     .method("POST")
                     .uri("/todos")
                     .header("content-type", "application/json")
@@ -363,7 +363,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(create.status(), StatusCode::CREATED);
+        assert_eq!(create.status(), http::StatusCode::CREATED);
 
         let create_json = json_body(create).await;
         assert_eq!(create_json["kind"], "todo");
@@ -373,14 +373,14 @@ mod tests {
         let list = app
             .clone()
             .oneshot(
-                Request::builder()
+                http::Request::builder()
                     .uri("/todos")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(list.status(), StatusCode::OK);
+        assert_eq!(list.status(), http::StatusCode::OK);
 
         let list_json = json_body(list).await;
         assert_eq!(list_json["kind"], "todos");
@@ -388,7 +388,7 @@ mod tests {
 
         let complete = app
             .oneshot(
-                Request::builder()
+                http::Request::builder()
                     .method("POST")
                     .uri("/todos/1/complete")
                     .body(Body::empty())
@@ -396,7 +396,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(complete.status(), StatusCode::OK);
+        assert_eq!(complete.status(), http::StatusCode::OK);
 
         let complete_json = json_body(complete).await;
         assert_eq!(complete_json["data"]["completed"], true);
@@ -410,7 +410,7 @@ mod tests {
         let blank_title = app
             .clone()
             .oneshot(
-                Request::builder()
+                http::Request::builder()
                     .method("POST")
                     .uri("/todos")
                     .header("content-type", "application/json")
@@ -419,11 +419,14 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(blank_title.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            blank_title.status(),
+            http::StatusCode::UNPROCESSABLE_ENTITY
+        );
 
         let missing = app
             .oneshot(
-                Request::builder()
+                http::Request::builder()
                     .method("PATCH")
                     .uri("/todos/42/title")
                     .header("content-type", "application/json")
@@ -432,7 +435,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(missing.status(), http::StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -442,14 +445,14 @@ mod tests {
 
         let health = app
             .oneshot(
-                Request::builder()
+                http::Request::builder()
                     .uri("/health")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(health.status(), StatusCode::OK);
+        assert_eq!(health.status(), http::StatusCode::OK);
 
         let health_json = json_body(health).await;
         assert_eq!(health_json["kind"], "health");

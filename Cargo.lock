@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "nestum"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "darling",
  "module_path_extractor",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "nestum-examples"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "axum",
  "clap",
