@@ -20,6 +20,12 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Install modum
+        run: cargo install modum --locked
+
+      - name: Modum
+        run: cargo modum check --root . --mode warn
+
       - name: Format
         run: cargo fmt --check
 
