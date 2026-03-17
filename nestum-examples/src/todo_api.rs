@@ -307,7 +307,10 @@ async fn create_todo(
             title: payload.title,
         }
     };
-    Ok((http::StatusCode::CREATED, Json(execute(&state, command).await?)))
+    Ok((
+        http::StatusCode::CREATED,
+        Json(execute(&state, command).await?),
+    ))
 }
 
 async fn rename_todo(
@@ -419,10 +422,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            blank_title.status(),
-            http::StatusCode::UNPROCESSABLE_ENTITY
-        );
+        assert_eq!(blank_title.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
 
         let missing = app
             .oneshot(
