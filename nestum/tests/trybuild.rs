@@ -42,6 +42,7 @@ fn ui() {
     t.compile_fail("tests/ui/fail_include.rs");
     t.compile_fail("tests/ui/fail_cfg.rs");
     t.compile_fail("tests/ui/fail_qself_path.rs");
+    t.compile_fail("tests/ui/fail_ambiguous_transitive_from.rs");
     t.compile_fail("tests/ui/fail_scope_item.rs");
     t.compile_fail("tests/ui/fail_scope_mod_decl.rs");
 }

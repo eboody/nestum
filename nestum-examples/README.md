@@ -7,8 +7,18 @@ Real-world showcase crate for `nestum`.
 
 ## What Each Showcase Proves
 
-- `todo_api` shows nestum in a normal service stack: request routing, domain commands, domain errors, database work, and emitted events all stay in nested enums.
-- `ops_cli` shows nestum in a derive-heavy CLI surface: nested subcommands still dispatch like the conceptual tree they model.
+- `todo_api` shows that a normal service stack does not need to flatten its model to stay readable. Commands, validation errors, persistence errors, and emitted events remain separate nested enum families, so invalid cross-family states stay unrepresentable.
+- `ops_cli` shows that a command tree can stay a real command tree. Clap parsing, type annotations, and dispatch all preserve the hierarchy instead of collapsing it into a flatter but less honest model.
+
+## Why That Matters
+
+`nestum` is not a new data model. These examples keep the same nested enums you would write for correctness:
+
+- a todo command is not a validation error
+- a billing command is not a user command
+- an outer envelope branch can only contain the inner enum family it was defined to wrap
+
+The crate only removes the wrapping noise that usually pushes people toward flatter, less precise representations.
 
 ## Run The API
 

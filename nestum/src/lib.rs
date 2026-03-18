@@ -729,6 +729,7 @@ fn expand_enum_no_context(
         &root_variants,
         &nested_variant_module_idents,
         nested_variant_modules,
+        Vec::new(),
     )
 }
 
@@ -1038,12 +1039,298 @@ fn build_root_variant_item(
     }
 }
 
+fn variant_from_fields(variant: &syn::Variant) -> Vec<&syn::Field> {
+    match &variant.fields {
+        Fields::Unit => Vec::new(),
+        Fields::Unnamed(fields) => fields
+            .unnamed
+            .iter()
+            .filter(|field| field_has_attr(field, "from"))
+            .collect(),
+        Fields::Named(fields) => fields
+            .named
+            .iter()
+            .filter(|field| field_has_attr(field, "from"))
+            .collect(),
+    }
+}
+
+fn field_has_attr(field: &syn::Field, attr_name: &str) -> bool {
+    field
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident(attr_name))
+}
+
+fn type_key(ty: &syn::Type) -> String {
+    quote!(#ty).to_string()
+}
+
+fn type_from_path(path: syn::Path) -> syn::Type {
+    syn::Type::Path(syn::TypePath { qself: None, path })
+}
+
+fn resolve_enum_info_from_type(
+    ty: &syn::Type,
+    current_file: &str,
+    module_root: &std::path::Path,
+    current_module: &str,
+    enums_by_ident: &EnumMap,
+    cache: &mut ModuleEnumCache,
+) -> Result<Option<ResolvedEnumInfo>, syn::Error> {
+    let Some(enum_path) = extract_plain_enum_path(ty)? else {
+        return Ok(None);
+    };
+    let module_path_str = resolve_module_path_string(
+        &enum_path.module_path,
+        enum_path.path_base,
+        current_module,
+        ty.span(),
+    )?;
+    let mut resolve_ctx = ResolveCtx {
+        current_file,
+        module_root,
+        current_module,
+        enums_by_ident,
+        cache,
+    };
+    let Some((item, marked)) = resolve_enum_from_path(
+        &enum_path.module_path,
+        enum_path.path_base,
+        &enum_path.enum_ident,
+        &mut resolve_ctx,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(ResolvedEnumInfo {
+        item,
+        marked,
+        module_path_str: module_path_str.clone(),
+        base_path: enum_type_path_from_module(
+            &module_path_str,
+            &enum_path.enum_ident,
+            &enum_path.enum_arguments,
+            false,
+        ),
+        enum_type_path: enum_type_path_from_module(
+            &module_path_str,
+            &enum_path.enum_ident,
+            &enum_path.enum_arguments,
+            marked,
+        ),
+    }))
+}
+
+fn canonical_error_source_type(
+    ty: &syn::Type,
+    current_file: &str,
+    module_root: &std::path::Path,
+    current_module: &str,
+    enums_by_ident: &EnumMap,
+    cache: &mut ModuleEnumCache,
+) -> Result<syn::Type, syn::Error> {
+    let Some(resolved) = resolve_enum_info_from_type(
+        ty,
+        current_file,
+        module_root,
+        current_module,
+        enums_by_ident,
+        cache,
+    )?
+    else {
+        return Ok(ty.clone());
+    };
+    if resolved.marked {
+        Ok(type_from_path(resolved.enum_type_path))
+    } else {
+        Ok(ty.clone())
+    }
+}
+
+fn collect_direct_from_type_keys(
+    item: &ItemEnum,
+    current_file: &str,
+    module_root: &std::path::Path,
+    current_module: &str,
+    enums_by_ident: &EnumMap,
+    cache: &mut ModuleEnumCache,
+) -> Result<HashSet<String>, syn::Error> {
+    let mut keys = HashSet::new();
+    for variant in &item.variants {
+        for field in variant_from_fields(variant) {
+            let ty = canonical_error_source_type(
+                &field.ty,
+                current_file,
+                module_root,
+                current_module,
+                enums_by_ident,
+                cache,
+            )?;
+            keys.insert(type_key(&ty));
+        }
+    }
+    Ok(keys)
+}
+
+fn collect_transitive_from_source_types(
+    enum_info: &ResolvedEnumInfo,
+    current_file: &str,
+    module_root: &std::path::Path,
+    cache: &mut ModuleEnumCache,
+) -> Result<Vec<syn::Type>, syn::Error> {
+    let mut collected = Vec::new();
+    let mut seen = HashSet::new();
+    let mut visited = HashSet::new();
+    collect_transitive_from_source_types_inner(
+        enum_info,
+        current_file,
+        module_root,
+        cache,
+        &mut visited,
+        &mut seen,
+        &mut collected,
+    )?;
+    Ok(collected)
+}
+
+fn collect_transitive_from_source_types_inner(
+    enum_info: &ResolvedEnumInfo,
+    current_file: &str,
+    module_root: &std::path::Path,
+    cache: &mut ModuleEnumCache,
+    visited: &mut HashSet<String>,
+    seen: &mut HashSet<String>,
+    collected: &mut Vec<syn::Type>,
+) -> Result<(), syn::Error> {
+    let enum_key = format!("{}::{}", enum_info.module_path_str, enum_info.item.ident);
+    if !visited.insert(enum_key) {
+        return Ok(());
+    }
+
+    let owner_enums = cache
+        .get(&enum_info.module_path_str)
+        .cloned()
+        .unwrap_or_else(|| {
+            let mut map = HashMap::new();
+            map.insert(enum_info.item.ident.to_string(), enum_info.item.clone());
+            map
+        });
+
+    for variant in &enum_info.item.variants {
+        for field in variant_from_fields(variant) {
+            let resolved = resolve_enum_info_from_type(
+                &field.ty,
+                current_file,
+                module_root,
+                &enum_info.module_path_str,
+                &owner_enums,
+                cache,
+            )?;
+            let source_ty =
+                if let Some(resolved) = resolved.as_ref().filter(|resolved| resolved.marked) {
+                    type_from_path(resolved.enum_type_path.clone())
+                } else {
+                    field.ty.clone()
+                };
+            let key = type_key(&source_ty);
+            if seen.insert(key) {
+                collected.push(source_ty);
+            }
+            if let Some(resolved) = resolved.filter(|resolved| resolved.marked) {
+                collect_transitive_from_source_types_inner(
+                    &resolved,
+                    current_file,
+                    module_root,
+                    cache,
+                    visited,
+                    seen,
+                    collected,
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn build_transitive_from_impls_for_nested_variant(
+    outer_item: &ItemEnum,
+    variant: &syn::Variant,
+    inner_enum: &ResolvedEnumInfo,
+    outer_direct_from_type_keys: &HashSet<String>,
+    generated_transitive_from_type_keys: &mut HashMap<String, String>,
+    current_file: &str,
+    module_root: &std::path::Path,
+    current_module: &str,
+    enums_by_ident: &EnumMap,
+    cache: &mut ModuleEnumCache,
+) -> Result<Vec<proc_macro2::TokenStream>, syn::Error> {
+    if variant_from_fields(variant).is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let immediate_inner_ty = canonical_error_source_type(
+        &extract_single_tuple_type(variant)?,
+        current_file,
+        module_root,
+        current_module,
+        enums_by_ident,
+        cache,
+    )?;
+    let immediate_inner_type_key = type_key(&immediate_inner_ty);
+    let transitive_source_types =
+        collect_transitive_from_source_types(inner_enum, current_file, module_root, cache)?;
+
+    let actual_enum_ident = format_ident!("__Nestum{}", outer_item.ident);
+    let variant_ident = &variant.ident;
+    let (impl_generics, ty_generics, where_clause) = outer_item.generics.split_for_impl();
+    let mut impls = Vec::new();
+
+    for source_ty in transitive_source_types {
+        let key = type_key(&source_ty);
+        if key == immediate_inner_type_key || outer_direct_from_type_keys.contains(&key) {
+            continue;
+        }
+        if let Some(existing_variant) = generated_transitive_from_type_keys.get(&key) {
+            if existing_variant != &variant_ident.to_string() {
+                return Err(syn::Error::new(
+                    variant.span(),
+                    format!(
+                        "cannot generate transitive From<{}> for {}; \
+multiple nested #[from] variants would accept it ({} and {}). \
+Add a direct outer conversion or remove one of the nested #[from] paths",
+                        quote!(#source_ty),
+                        outer_item.ident,
+                        existing_variant,
+                        variant_ident,
+                    ),
+                ));
+            }
+            continue;
+        }
+        generated_transitive_from_type_keys.insert(key, variant_ident.to_string());
+
+        impls.push(quote! {
+            impl #impl_generics ::core::convert::From<#source_ty> for self::#actual_enum_ident #ty_generics #where_clause {
+                fn from(value: #source_ty) -> Self {
+                    Self::#variant_ident(::core::convert::Into::into(value))
+                }
+            }
+        });
+    }
+
+    Ok(impls)
+}
+
 fn emit_expanded_enum_module(
     item: &ItemEnum,
     enum_variants: Vec<syn::Variant>,
     root_variants: &[syn::Variant],
     _nested_variant_module_idents: &[syn::Ident],
     nested_variant_modules: Vec<proc_macro2::TokenStream>,
+    support_items: Vec<proc_macro2::TokenStream>,
 ) -> Result<proc_macro2::TokenStream, syn::Error> {
     let vis = &item.vis;
     let enum_mod_ident = &item.ident;
@@ -1081,13 +1368,14 @@ fn emit_expanded_enum_module(
             #root_variant_exports
             #(#root_variant_items)*
             #(#nested_variant_modules)*
+            #(#support_items)*
         }
     })
 }
 
 fn expand_enum_with_context(
     item: ItemEnum,
-    _enums_by_ident: &EnumMap,
+    enums_by_ident: &EnumMap,
     _marked_enums: &HashSet<String>,
     module_path: &str,
     current_file: &str,
@@ -1098,6 +1386,16 @@ fn expand_enum_with_context(
     let mut root_variants = Vec::new();
     let mut nested_variant_module_idents = Vec::new();
     let mut nested_variant_modules = Vec::new();
+    let mut support_items = Vec::new();
+    let outer_direct_from_type_keys = collect_direct_from_type_keys(
+        &item,
+        current_file,
+        module_root,
+        module_path,
+        enums_by_ident,
+        cache,
+    )?;
+    let mut generated_transitive_from_type_keys = HashMap::new();
 
     for variant in item.variants.iter() {
         let mut variant_clean = variant.clone();
@@ -1143,6 +1441,18 @@ fn expand_enum_with_context(
 
             nested_variant_module_idents.push(variant_ident.clone());
             nested_variant_modules.push(build_nested_variant_module(variant_ident, &wrapper_items));
+            support_items.extend(build_transitive_from_impls_for_nested_variant(
+                &item,
+                variant,
+                &resolved_inner,
+                &outer_direct_from_type_keys,
+                &mut generated_transitive_from_type_keys,
+                current_file,
+                module_root,
+                module_path,
+                enums_by_ident,
+                cache,
+            )?);
         }
 
         if !is_marked_nested {
@@ -1157,6 +1467,7 @@ fn expand_enum_with_context(
         &root_variants,
         &nested_variant_module_idents,
         nested_variant_modules,
+        support_items,
     )
 }
 

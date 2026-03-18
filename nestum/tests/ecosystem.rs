@@ -1,5 +1,6 @@
 use nestum::{nested, nestum};
 use serde::{Deserialize, Serialize};
+use std::{error::Error as _, io};
 use thiserror::Error;
 
 #[nestum]
@@ -32,6 +33,33 @@ pub enum ApiError {
     Document(#[from] DocumentError),
     #[error("transport error")]
     Transport,
+}
+
+#[nestum]
+#[derive(Debug, Error)]
+pub enum LeafError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+#[nestum]
+#[derive(Debug, Error)]
+pub enum ServiceError {
+    #[error(transparent)]
+    Leaf(#[from] LeafError),
+    #[error("storage failed at {path}")]
+    Storage {
+        path: &'static str,
+        #[source]
+        source: io::Error,
+    },
+}
+
+#[nestum]
+#[derive(Debug, Error)]
+pub enum OuterError {
+    #[error(transparent)]
+    Service(#[from] ServiceError),
 }
 
 #[test]
@@ -73,4 +101,36 @@ fn thiserror_transparent_and_from_work_with_nested_enums() {
         matches!(err, ApiError::Document::InvalidTitle(title) if title == "draft")
     };
     assert!(ok);
+}
+
+#[test]
+fn transitive_from_reaches_the_outer_error_envelope() {
+    fn fail() -> Result<(), OuterError::Enum> {
+        Err(io::Error::other("disk broke"))?;
+        Ok(())
+    }
+
+    let err = fail().expect_err("io leaf error should convert into the outer envelope");
+    assert_eq!(err.to_string(), "disk broke");
+
+    let ok = nested! {
+        matches!(err, OuterError::Service::Leaf::Io(source) if source.to_string() == "disk broke")
+    };
+    assert!(ok);
+}
+
+#[test]
+fn named_field_nested_errors_keep_their_source_chain() {
+    let err: OuterError::Enum = nested! {
+        OuterError::Service::Storage {
+            path: "todos.db",
+            source: io::Error::other("disk broke"),
+        }
+    };
+
+    assert_eq!(err.to_string(), "storage failed at todos.db");
+    let source = err
+        .source()
+        .expect("named-field source should be preserved");
+    assert_eq!(source.to_string(), "disk broke");
 }

@@ -1,0 +1,5 @@
+error: cannot generate transitive From<io :: Error> for AppError; multiple nested #[from] variants would accept it (Left and Right). Add a direct outer conversion or remove one of the nested #[from] paths
+  --> tests/ui/fail_ambiguous_transitive_from.rs:24:5
+   |
+24 |     #[error(transparent)]
+   |     ^

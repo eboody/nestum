@@ -1,6 +1,6 @@
 <div align="center">
   <img alt="nestum logo" src="https://raw.githubusercontent.com/eboody/nestum/main/nestum.png" width="360">
-  <p>Nestum lets nested enums read like nested paths in Rust.</p>
+  <p>Nestum keeps the correct nested-enum model and removes the syntax tax.</p>
   <p>
     <a href="https://github.com/eboody/nestum/actions/workflows/ci.yml"><img src="https://github.com/eboody/nestum/actions/workflows/ci.yml/badge.svg?branch=main&event=push" alt="build status" /></a>
     <a href="https://crates.io/crates/nestum"><img src="https://img.shields.io/crates/v/nestum.svg?logo=rust" alt="crates.io" /></a>
@@ -9,6 +9,10 @@
 </div>
 
 # Nestum
+
+When nested enums are the honest model, they buy you real compile-time invariants.
+
+If `Event::Document` wraps `DocumentEvent`, then the type system already rules out the wrong family. You cannot accidentally construct a document envelope around a user event. The problem is not correctness. The problem is that the accurate model gets noisy fast:
 
 Construct:
 
@@ -51,6 +55,18 @@ nested! {
 let _ = inner;
 ```
 
+`nestum` keeps the nested-enum design, keeps the invariant, and removes most of the wrapping noise.
+
+## Correctness First
+
+Use `nestum` when nested enums are already the right way to model the domain.
+
+- `Event::Document` always contains a `DocumentEvent`.
+- `Event::User` always contains a `UserEvent`.
+- cross-family mistakes stay impossible at compile time.
+
+`nestum` does not flatten the model, erase the family boundary, or swap compile-time guarantees for runtime checks. It generates nicer constructor and pattern surfaces over the same nested-enum structure.
+
 ## Mental Model
 
 - `#[nestum]` on an enum turns the enum name into a namespace for nested-path constructors.
@@ -80,6 +96,12 @@ Weak fits usually look like:
 
 `nestum` is strongest when the outer enum is already a real envelope over event, command, or message families.
 
+That usually means:
+
+- the nested enums are already the most accurate model of the problem
+- the family boundary is carrying real correctness information
+- the pain is mostly constructor and match noise
+
 ## Quick Start
 
 ```bash
@@ -94,8 +116,8 @@ cargo add nestum
 
 The [`nestum-examples`](./nestum-examples) workspace crate shows the macro against real libraries instead of toy enums.
 
-- `todo_api`: Axum + in-memory SQLite + broadcast events. This proves nested command trees, nested domain errors, and nested events can survive a normal web stack.
-- `ops_cli`: Clap subcommands with nested dispatch. This proves nestum can sit on top of derive-heavy command surfaces without turning the type tree into boilerplate.
+- `todo_api`: Axum + in-memory SQLite + broadcast events. This keeps command families, domain errors, and emitted events as separate nested enum trees instead of flattening them for convenience.
+- `ops_cli`: Clap subcommands with nested dispatch. This keeps the command tree honest at the type level while still letting the dispatch code read like the tree it models.
 
 Run them with:
 
@@ -130,6 +152,8 @@ enum Event {
 let _ = Event::Document::Created;
 let _ = Event::Image::Archived;
 ```
+
+This is the core use case: keep the real family boundary in the type system, but stop paying for it with tuple-wrapping boilerplate.
 
 ### Named-Field Constructors
 
@@ -208,6 +232,7 @@ let _ = Outer::Wrap::A;
 
 - `serde` round trips for wrapped outer enums
 - `thiserror` derives with transparent outer error envelopes
+- transitive `#[from]` conversions from leaf errors into nested outer error envelopes
 - common assertion macros, including `assert!(matches!(...))`
 
 ## Core Rules
@@ -216,11 +241,20 @@ let _ = Outer::Wrap::A;
 - Both the outer enum and the nested inner enum need `#[nestum]`.
 - Use `nested!` for focused rewrites, or `#[nestum_scope]` for function-, impl-, method-, or inline-module-level rewrites.
 
+## No Type-Safety Trade
+
+`nestum` is syntax and namespace machinery over real nested enums.
+
+- It keeps the same compile-time family boundaries.
+- It does not weaken the invariant that an outer branch contains the right inner enum family.
+- The tradeoffs are mostly in syntax, naming, and tooling, not in static correctness.
+
 ## Advanced Notes
 
 - In type positions, use `Outer::Enum<T>` for the enum type itself.
 - Put `#[nestum]` before `#[derive(...)]` so derive macros see the rewritten enum shape.
 - `serde`, `thiserror`, and common assertion macros are covered by tests.
+- When each nested error wrapper opts into `#[from]`, leaf errors can use `?` all the way into the outer envelope.
 - Generic outer enums use functions for unit constructors, so `Outer::Other()` or `Outer::Wrap::Ready()` may be function calls instead of constants.
 - Plain local inner enum paths, `self::...`, `super::...`, and qualified crate-local inner enum paths are supported, including generic arguments.
 - Cross-module nesting is explicit with `#[nestum(external = "crate::path::Enum")]`.
