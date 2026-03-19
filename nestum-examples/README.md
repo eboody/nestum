@@ -10,6 +10,11 @@ Real-world showcase crate for `nestum`.
 - `todo_api` shows that a normal service stack does not need to flatten its model to stay readable. Commands, validation errors, persistence errors, and emitted events remain separate nested enum families, so invalid cross-family states stay unrepresentable.
 - `ops_cli` shows that a command tree can stay a real command tree. Clap parsing, type annotations, and dispatch all preserve the hierarchy instead of collapsing it into a flatter but less honest model.
 
+## Public Surface
+
+- `todo_api` exposes semantic submodules instead of repeated top-level prefixes: `todo_api::health::{Command, Response}`, `todo_api::todo::{Command, Error, Event, Title}`, and `todo_api::app::{Command, Error, Event, State}`.
+- `ops_cli` keeps the outer CLI entry points at the top level with `ops_cli::{Cli, Command}` and moves the nested command families under `ops_cli::command::{User, Billing}`.
+
 ## Why That Matters
 
 `nestum` is not a new data model. These examples keep the same nested enums you would write for correctness:

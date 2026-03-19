@@ -119,6 +119,8 @@ The [`nestum-examples`](./nestum-examples) workspace crate shows the macro again
 - `todo_api`: Axum + in-memory SQLite + broadcast events. This keeps command families, domain errors, and emitted events as separate nested enum trees instead of flattening them for convenience.
 - `ops_cli`: Clap subcommands with nested dispatch. This keeps the command tree honest at the type level while still letting the dispatch code read like the tree it models.
 
+The example crate also shows the API-shape side of that approach: `todo_api` is split into `app`, `health`, and `todo` modules, and `ops_cli` exposes inner command families under `command::{User, Billing}` instead of repeating long top-level type prefixes.
+
 Run them with:
 
 ```bash

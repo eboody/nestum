@@ -3,12 +3,12 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let state = todo_api::AppState::in_memory().await?;
+    let state = todo_api::app::State::in_memory().await?;
     let mut events = state.subscribe();
 
     tokio::spawn(async move {
         while let Ok(event) = events.recv().await {
-            eprintln!("{}", todo_api::event_summary(event));
+            eprintln!("{}", event.summary());
         }
     });
 

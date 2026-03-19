@@ -4,8 +4,7 @@ use std::sync::{Mutex, OnceLock};
 use darling::FromMeta;
 use darling::ast::NestedMeta;
 use module_path_extractor::{
-    get_source_info as extractor_get_source_info, module_path_from_file_with_root,
-    module_path_to_file, module_root_from_file,
+    module_path_from_file_with_root, module_path_to_file, module_root_from_file,
 };
 use proc_macro::TokenStream;
 use proc_macro_error2::proc_macro_error;
@@ -174,13 +173,13 @@ pub fn nestum_scope(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 enum NestedInput {
-    Expr(Expr),
+    Expr(Box<Expr>),
     Stmts(Vec<Stmt>),
 }
 
 fn parse_nested_input(tokens: proc_macro2::TokenStream) -> syn::Result<NestedInput> {
     if let Ok(expr) = syn::parse2::<Expr>(tokens.clone()) {
-        return Ok(NestedInput::Expr(expr));
+        return Ok(NestedInput::Expr(Box::new(expr)));
     }
 
     let wrapped = quote!({ #tokens });
@@ -199,7 +198,7 @@ for broader rewriting, use #[nestum_scope] on the enclosing function, impl, or i
 
 fn expand_nested_input(input: NestedInput) -> Result<proc_macro2::TokenStream, syn::Error> {
     match input {
-        NestedInput::Expr(expr) => expand_nested_expr(expr),
+        NestedInput::Expr(expr) => expand_nested_expr(*expr),
         NestedInput::Stmts(stmts) => {
             let block = Expr::Block(ExprBlock {
                 attrs: Vec::new(),
@@ -237,7 +236,7 @@ fn resolve_current_module_enums(
 }
 
 fn callsite_source_info() -> Option<(String, Option<usize>)> {
-    if let Some((file_path, line_number)) = extractor_get_source_info() {
+    if let Some((file_path, line_number)) = module_path_extractor::get_source_info() {
         return Some((
             absolutize_source_path(&file_path),
             if line_number == 0 {
@@ -1261,11 +1260,7 @@ fn build_transitive_from_impls_for_nested_variant(
     inner_enum: &ResolvedEnumInfo,
     outer_direct_from_type_keys: &HashSet<String>,
     generated_transitive_from_type_keys: &mut HashMap<String, String>,
-    current_file: &str,
-    module_root: &std::path::Path,
-    current_module: &str,
-    enums_by_ident: &EnumMap,
-    cache: &mut ModuleEnumCache,
+    resolve_ctx: &mut ResolveCtx<'_>,
 ) -> Result<Vec<proc_macro2::TokenStream>, syn::Error> {
     if variant_from_fields(variant).is_empty() {
         return Ok(Vec::new());
@@ -1273,15 +1268,19 @@ fn build_transitive_from_impls_for_nested_variant(
 
     let immediate_inner_ty = canonical_error_source_type(
         &extract_single_tuple_type(variant)?,
-        current_file,
-        module_root,
-        current_module,
-        enums_by_ident,
-        cache,
+        resolve_ctx.current_file,
+        resolve_ctx.module_root,
+        resolve_ctx.current_module,
+        resolve_ctx.enums_by_ident,
+        resolve_ctx.cache,
+    )?;
+    let transitive_source_types = collect_transitive_from_source_types(
+        inner_enum,
+        resolve_ctx.current_file,
+        resolve_ctx.module_root,
+        resolve_ctx.cache,
     )?;
     let immediate_inner_type_key = type_key(&immediate_inner_ty);
-    let transitive_source_types =
-        collect_transitive_from_source_types(inner_enum, current_file, module_root, cache)?;
 
     let actual_enum_ident = format_ident!("__Nestum{}", outer_item.ident);
     let variant_ident = &variant.ident;
@@ -1441,17 +1440,20 @@ fn expand_enum_with_context(
 
             nested_variant_module_idents.push(variant_ident.clone());
             nested_variant_modules.push(build_nested_variant_module(variant_ident, &wrapper_items));
+            let mut resolve_ctx = ResolveCtx {
+                current_file,
+                module_root,
+                current_module: module_path,
+                enums_by_ident,
+                cache,
+            };
             support_items.extend(build_transitive_from_impls_for_nested_variant(
                 &item,
                 variant,
                 &resolved_inner,
                 &outer_direct_from_type_keys,
                 &mut generated_transitive_from_type_keys,
-                current_file,
-                module_root,
-                module_path,
-                enums_by_ident,
-                cache,
+                &mut resolve_ctx,
             )?);
         }
 
@@ -2478,28 +2480,28 @@ fn rewrite_pat_struct(
     if pat_struct.qself.is_some() {
         let mut pat_struct = pat_struct;
         for field in &mut pat_struct.fields {
-            field.pat = Box::new(rewrite_pat(
+            *field.pat = rewrite_pat(
                 (*field.pat).clone(),
                 current_file,
                 module_root,
                 current_module,
                 enums_by_ident,
                 cache,
-            )?);
+            )?;
         }
         return Ok(Pat::Struct(pat_struct));
     }
 
     let mut fields = pat_struct.fields.clone();
     for field in &mut fields {
-        field.pat = Box::new(rewrite_pat(
+        *field.pat = rewrite_pat(
             (*field.pat).clone(),
             current_file,
             module_root,
             current_module,
             enums_by_ident,
             cache,
-        )?);
+        )?;
     }
 
     let Some(resolved_path) = resolve_nested_match_path(
@@ -2950,7 +2952,7 @@ impl VisitMut for NestedExprRewriter<'_> {
             self.enums_by_ident,
             self.cache,
         ) {
-            Ok(pat) => expr_let.pat = Box::new(pat),
+            Ok(pat) => *expr_let.pat = pat,
             Err(err) => self.set_error(err),
         }
     }
@@ -3052,7 +3054,7 @@ use matches!(expr, PATTERN) or matches!(expr, PATTERN if guard)"
                 .guard
                 .as_ref()
                 .map(|(if_token, guard)| quote!(#if_token #guard));
-            expr_macro.mac.tokens = quote!(#expr, #pat #guard).into();
+            expr_macro.mac.tokens = quote!(#expr, #pat #guard);
             return;
         }
 
@@ -3081,7 +3083,7 @@ use assert!(expr) or assert!(expr, ...)"
                 .trailing
                 .as_ref()
                 .map(|(comma, rest)| quote!(#comma #rest));
-            expr_macro.mac.tokens = quote!(#expr #trailing).into();
+            expr_macro.mac.tokens = quote!(#expr #trailing);
             return;
         }
 
@@ -3118,7 +3120,7 @@ use assert_eq!(left, right) or assert_eq!(left, right, ...)"
                 .trailing
                 .as_ref()
                 .map(|(comma, rest)| quote!(#comma #rest));
-            expr_macro.mac.tokens = quote!(#left, #right #trailing).into();
+            expr_macro.mac.tokens = quote!(#left, #right #trailing);
             return;
         }
 

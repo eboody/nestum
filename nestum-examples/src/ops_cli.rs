@@ -18,28 +18,32 @@ pub struct ChargeInvoiceArgs {
     pub cents: u64,
 }
 
-#[nestum]
-#[derive(Debug, Clone, Subcommand)]
-pub enum UserCommand {
-    Create(CreateUserArgs),
-    Suspend { user_id: u64 },
-    ResetPassword(ResetPasswordArgs),
-}
+pub mod command {
+    use super::*;
 
-#[nestum]
-#[derive(Debug, Clone, Subcommand)]
-pub enum BillingCommand {
-    Charge(ChargeInvoiceArgs),
-    Refund { invoice_id: u64 },
+    #[nestum]
+    #[derive(Debug, Clone, Subcommand)]
+    pub enum User {
+        Create(CreateUserArgs),
+        Suspend { user_id: u64 },
+        ResetPassword(ResetPasswordArgs),
+    }
+
+    #[nestum]
+    #[derive(Debug, Clone, Subcommand)]
+    pub enum Billing {
+        Charge(ChargeInvoiceArgs),
+        Refund { invoice_id: u64 },
+    }
 }
 
 #[nestum]
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     #[command(subcommand)]
-    Users(UserCommand),
+    Users(command::User),
     #[command(subcommand)]
-    Billing(BillingCommand),
+    Billing(command::Billing),
 }
 
 #[derive(Debug, Parser)]
@@ -52,20 +56,24 @@ pub struct Cli {
     pub command: Command::Enum,
 }
 
-pub fn run(cli: Cli) -> String {
-    dispatch(cli.command)
+impl Cli {
+    pub fn run(self) -> String {
+        self.command.dispatch()
+    }
 }
 
-pub fn dispatch(command: Command::Enum) -> String {
-    nested! {
-        match command {
-            Command::Users::Create(args) => format!("create-user:{}", args.email),
-            Command::Users::Suspend { user_id } => format!("suspend-user:{user_id}"),
-            Command::Users::ResetPassword(args) => format!("reset-password:{}", args.user_id),
-            Command::Billing::Charge(args) => {
-                format!("charge-invoice:{}:{}c", args.invoice_id, args.cents)
+impl Command::Enum {
+    pub fn dispatch(self) -> String {
+        nested! {
+            match self {
+                Command::Users::Create(args) => format!("create-user:{}", args.email),
+                Command::Users::Suspend { user_id } => format!("suspend-user:{user_id}"),
+                Command::Users::ResetPassword(args) => format!("reset-password:{}", args.user_id),
+                Command::Billing::Charge(args) => {
+                    format!("charge-invoice:{}:{}c", args.invoice_id, args.cents)
+                }
+                Command::Billing::Refund { invoice_id } => format!("refund-invoice:{invoice_id}"),
             }
-            Command::Billing::Refund { invoice_id } => format!("refund-invoice:{invoice_id}"),
         }
     }
 }
@@ -79,14 +87,14 @@ mod tests {
         let cli =
             Cli::try_parse_from(["ops-console", "users", "create", "dev@example.com"]).unwrap();
 
-        assert_eq!(run(cli), "create-user:dev@example.com");
+        assert_eq!(cli.run(), "create-user:dev@example.com");
     }
 
     #[test]
     fn clap_handles_struct_variants_and_dispatch() {
         let cli = Cli::try_parse_from(["ops-console", "billing", "refund", "42"]).unwrap();
 
-        assert_eq!(run(cli), "refund-invoice:42");
+        assert_eq!(cli.run(), "refund-invoice:42");
     }
 
     #[test]
@@ -94,16 +102,17 @@ mod tests {
         let cli = Cli::try_parse_from(["ops-console", "billing", "charge", "7", "--cents", "1200"])
             .unwrap();
 
-        assert_eq!(run(cli), "charge-invoice:7:1200c");
+        assert_eq!(cli.run(), "charge-invoice:7:1200c");
     }
 
     #[test]
     fn dispatch_accepts_nested_constructor_paths_directly() {
-        let result = dispatch(nested! {
+        let result = nested! {
             Command::Users::Suspend {
                 user_id: 12,
             }
-        });
+        }
+        .dispatch();
 
         assert_eq!(result, "suspend-user:12");
     }
