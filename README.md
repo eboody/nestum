@@ -10,9 +10,9 @@
 
 # Nestum
 
-If your Rust app already has real command, event, or error trees, nested enums are often the honest model.
+If your Rust code already has real command, event, or error trees, `nestum` is for the annoying part: constructing and matching them.
 
-They keep family boundaries in the type system, but the call sites get noisy fast.
+The model is usually right already. The syntax is what gets old:
 
 Before:
 
@@ -40,7 +40,7 @@ match self {
 }
 ```
 
-`nestum` keeps the same nested-enum model, keeps the same compile-time invariant, and removes most of the tuple-wrapping tax.
+That is the whole pitch. `nestum` keeps the same nested-enum model, keeps the same compile-time invariant, and removes most of the tuple-wrapping tax.
 
 ## When Nestum Is Worth It
 
