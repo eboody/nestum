@@ -23,6 +23,7 @@ fn ui() {
     t.pass("tests/ui/pass_derive.rs");
     t.pass("tests/ui/pass_scope.rs");
     t.pass("tests/ui/pass_self_path.rs");
+    t.pass("tests/ui/pass_same_name_siblings.rs");
     t.pass("tests/ui/pass_super_path.rs");
     t.compile_fail("tests/ui/fail_enum_args.rs");
     t.compile_fail("tests/ui/fail_reserved_enum_variant.rs");
@@ -38,6 +39,9 @@ fn ui() {
     t.compile_fail("tests/ui/fail_external_empty_args.rs");
     t.compile_fail("tests/ui/fail_external_type_not_ident.rs");
     t.compile_fail("tests/ui/fail_external_not_marked.rs");
+    t.compile_fail("tests/ui/fail_cfg_variant.rs");
+    t.compile_fail("tests/ui/fail_macro_generated_inner.rs");
+    t.compile_fail("tests/ui/fail_unresolved_nested_branch.rs");
     t.compile_fail("tests/ui/fail_path_attr.rs");
     t.compile_fail("tests/ui/fail_include.rs");
     t.compile_fail("tests/ui/fail_cfg.rs");

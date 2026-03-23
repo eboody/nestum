@@ -1,0 +1,5 @@
+error: variant Wrap on enum Outer points at inner type Payload, but nestum could not resolve it as a crate-local #[nestum] enum from parsed source; nested paths require a supported crate-local #[nestum] enum. macro-generated local enums, external crates, and unsupported module layouts cannot be used as nested branches
+  --> tests/ui/fail_unresolved_nested_branch.rs:11:23
+   |
+11 |     let _ = nested! { Outer::Wrap::Missing };
+   |                       ^^^^^

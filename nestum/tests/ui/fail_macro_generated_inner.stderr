@@ -1,0 +1,20 @@
+error[E0433]: failed to resolve: expected type, found function `Wrap` in `Outer`
+  --> tests/ui/fail_macro_generated_inner.rs:20:20
+   |
+20 |     let _ = Outer::Wrap::A;
+   |                    ^^^^ expected type, found function `Wrap` in `Outer`
+   |
+help: there is an enum variant `crate::Outer::__NestumOuter::Wrap`; try using the variant's enum
+   |
+20 -     let _ = Outer::Wrap::A;
+20 +     let _ = crate::Outer::__NestumOuter::A;
+   |
+
+error[E0573]: expected type, found module `Inner`
+  --> tests/ui/fail_macro_generated_inner.rs:16:10
+   |
+16 |     Wrap(Inner),
+   |          ^^^^^
+   |          |
+   |          not a type
+   |          help: try using the variant's enum: `syn::AttrStyle`

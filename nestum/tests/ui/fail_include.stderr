@@ -1,4 +1,4 @@
-error: unable to locate module file for inner; expected inner.rs or inner/mod.rs under the module root
+error: nestum cannot resolve module inner authoritatively because its body uses include!(...); include!-generated modules are unsupported for nesting resolution
  --> tests/ui/fail_include.rs:8:1
   |
 8 | #[nestum]

@@ -1,0 +1,11 @@
+error: nestum cannot resolve enum Inner authoritatively because variant A uses #[cfg] or #[cfg_attr]; cfg-gated enum variants are unsupported for nesting resolution
+ --> tests/ui/fail_cfg_variant.rs:4:1
+  |
+4 | pub enum Inner {
+  | ^^^
+
+error: nestum cannot resolve enum Inner authoritatively because variant A uses #[cfg] or #[cfg_attr]; cfg-gated enum variants are unsupported for nesting resolution
+  --> tests/ui/fail_cfg_variant.rs:12:10
+   |
+12 |     Wrap(Inner),
+   |          ^^^^^

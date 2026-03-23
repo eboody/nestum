@@ -1,6 +1,6 @@
 use nestum::nestum;
 
-#[path = "missing_inner.rs"]
+#[path = "path_attr_inner.rs"]
 mod inner;
 
 #[nestum]
