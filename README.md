@@ -42,6 +42,13 @@ match self {
 
 That is the whole pitch. `nestum` keeps the same nested-enum model, keeps the same compile-time invariant, and removes most of the tuple-wrapping tax.
 
+## Start Here
+
+- want the pitch quickly: read this intro and [When Nestum Is Worth It](#when-nestum-is-worth-it)
+- want to see real usage: jump to [Flagship Use Case](#flagship-use-case) and [Migration Guide](#migration-guide)
+- want framework integration: see [Cookbooks](#cookbooks)
+- want the mechanism and limits: read [Authority Surface](#authority-surface) and [Limitations](#limitations)
+
 ## When Nestum Is Worth It
 
 Use `nestum` when all of these are true:
